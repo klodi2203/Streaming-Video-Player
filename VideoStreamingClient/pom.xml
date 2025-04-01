@@ -54,6 +54,12 @@
             <artifactId>javafx-swing</artifactId>
             <version>17</version>
         </dependency>
+        <!-- Add JSpeedTest library for connection speed testing -->
+        <dependency>
+            <groupId>fr.bmartel</groupId>
+            <artifactId>jspeedtest</artifactId>
+            <version>1.32.1</version>
+        </dependency>
     </dependencies>
 
     <build>

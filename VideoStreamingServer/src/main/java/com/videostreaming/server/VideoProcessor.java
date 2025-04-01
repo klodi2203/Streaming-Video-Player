@@ -20,6 +20,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class VideoProcessor {
     private static final Logger logger = LoggerFactory.getLogger(VideoProcessor.class);
@@ -31,6 +33,9 @@ public class VideoProcessor {
     private FFprobe ffprobe;
     private FFmpegExecutor executor;
     private List<VideoFile> availableVideos;
+    
+    // Pattern to extract video name, resolution, and format
+    private static final Pattern VIDEO_PATTERN = Pattern.compile("(.+)-(\\d+p)\\.(\\w+)");
 
     public VideoProcessor() {
         this(true);
@@ -318,5 +323,41 @@ public class VideoProcessor {
         }
         
         availableVideos = validVideos;
+    }
+
+    public void scanVideosDirectory() {
+        logger.info("Scanning videos directory: {}", VIDEO_DIR);
+        availableVideos.clear();
+        
+        File directory = new File(VIDEO_DIR);
+        if (!directory.exists() || !directory.isDirectory()) {
+            logger.error("Videos directory does not exist or is not a directory: {}", VIDEO_DIR);
+            return;
+        }
+        
+        File[] files = directory.listFiles();
+        if (files == null) {
+            logger.error("Error listing files in directory: {}", VIDEO_DIR);
+            return;
+        }
+        
+        for (File file : files) {
+            if (file.isFile()) {
+                String filename = file.getName();
+                Matcher matcher = VIDEO_PATTERN.matcher(filename);
+                
+                if (matcher.matches()) {
+                    String name = matcher.group(1);
+                    String resolution = matcher.group(2);
+                    String format = matcher.group(3);
+                    
+                    VideoFile video = new VideoFile(name, resolution, format, filename);
+                    availableVideos.add(video);
+                    logger.info("Found video: {}", video);
+                }
+            }
+        }
+        
+        logger.info("Found {} videos in directory", availableVideos.size());
     }
 } 
