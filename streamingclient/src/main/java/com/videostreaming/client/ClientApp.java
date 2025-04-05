@@ -69,86 +69,36 @@ public class ClientApp extends Application {
         
         // Create layout
         BorderPane root = new BorderPane();
-        root.setPadding(new Insets(10));
+        root.setPadding(new Insets(15));
         
         // Add header
         Label headerLabel = new Label("Video Streaming Client");
         headerLabel.getStyleClass().add("header-label");
         root.setTop(headerLabel);
         
-        // Main content area
-        VBox contentVBox = new VBox(10);
+        // Main content area - use HBox for side-by-side layout
+        HBox contentContainer = new HBox(15);
+        contentContainer.setPadding(new Insets(15, 0, 0, 0));
         
-        // Speed test section with improved layout
-        VBox speedTestSection = new VBox(5);
-        speedTestSection.setStyle("-fx-border-color: #cccccc; -fx-border-radius: 5; -fx-background-color: #f8f8f8; -fx-padding: 10;");
+        // LEFT SIDE - Video list
+        VBox leftPanel = new VBox(10);
+        leftPanel.getStyleClass().add("panel");
+        leftPanel.setPadding(new Insets(10));
+        leftPanel.setPrefWidth(400);
+        leftPanel.setMaxHeight(Double.MAX_VALUE);
+        leftPanel.setMinHeight(Region.USE_COMPUTED_SIZE);
+        leftPanel.setBorder(new Border(new BorderStroke(Color.LIGHTGRAY, BorderStrokeStyle.SOLID, CornerRadii.EMPTY, BorderWidths.DEFAULT)));
         
-        Label speedTestHeading = new Label("Download Speed Test");
-        speedTestHeading.setFont(Font.font("System", FontWeight.BOLD, 14));
-        
-        // Speed test status
-        speedTestStatusLabel = new Label("Testing download speed...");
-        speedTestStatusLabel.setTextFill(Color.GRAY);
-        
-        // Speed display with indicator
-        HBox speedDisplayBox = new HBox(10);
-        speedDisplayBox.setAlignment(Pos.CENTER);
-        
-        speedTestIndicator = new ProgressIndicator(0);
-        speedTestIndicator.setPrefSize(50, 50);
-        
-        speedValueLabel = new Label("0.00 Mbps");
-        speedValueLabel.setFont(Font.font("System", FontWeight.BOLD, 20));
-        
-        speedDisplayBox.getChildren().addAll(speedTestIndicator, speedValueLabel);
-        
-        speedTestSection.getChildren().addAll(speedTestHeading, speedTestStatusLabel, speedDisplayBox);
-        
-        // Format selection section with server communication status
-        VBox formatSection = new VBox(5);
-        formatSection.setPadding(new Insets(10, 0, 10, 0));
-        formatSection.setStyle("-fx-border-color: #cccccc; -fx-border-radius: 5; -fx-background-color: #f8f8f8; -fx-padding: 10;");
-        
-        Label formatSectionHeading = new Label("Video Format Selection");
-        formatSectionHeading.setFont(Font.font("System", FontWeight.BOLD, 14));
-        
-        HBox formatBox = new HBox(10);
-        formatBox.setAlignment(Pos.CENTER_LEFT);
-        
-        Label formatLabel = new Label("Select Format:");
-        formatLabel.setFont(Font.font("System", FontWeight.NORMAL, 12));
-        
-        // Initialize format combo box
-        formatComboBox = new ComboBox<>();
-        formatComboBox.getItems().addAll("mp4", "avi", "mkv");
-        formatComboBox.setValue("mp4");
-        formatComboBox.setDisable(true); // Disabled until speed test completes
-        formatComboBox.setPrefWidth(150);
-        
-        formatBox.getChildren().addAll(formatLabel, formatComboBox);
-        
-        // Network status 
-        HBox networkStatusBox = new HBox(10);
-        networkStatusBox.setAlignment(Pos.CENTER_LEFT);
-        
-        networkProgressIndicator = new ProgressIndicator(0);
-        networkProgressIndicator.setPrefSize(20, 20);
-        networkProgressIndicator.setVisible(false);
-        
-        networkStatusLabel = new Label("Speed test must complete before selecting a format");
-        networkStatusLabel.setTextFill(Color.GRAY);
-        
-        networkStatusBox.getChildren().addAll(networkProgressIndicator, networkStatusLabel);
-        
-        formatSection.getChildren().addAll(formatSectionHeading, formatBox, networkStatusBox);
-        
-        // Video list section
         Label videosLabel = new Label("Available Videos");
-        videosLabel.getStyleClass().add("section-header");
+        videosLabel.getStyleClass().add("section-label");
+        
+        videoListView = new ListView<>();
         videoItems = FXCollections.observableArrayList();
-        videoListView = new ListView<>(videoItems);
+        videoListView.setItems(videoItems);
         videoListView.getStyleClass().add("video-list");
-        videoListView.setPrefHeight(200);
+        videoListView.setPrefHeight(Double.MAX_VALUE);
+        videoListView.setMinHeight(200);
+        videoListView.setPlaceholder(new Label("No videos available"));
         
         // Configure the cell factory to display video information
         videoListView.setCellFactory(new Callback<ListView<Video>, ListCell<Video>>() {
@@ -175,47 +125,120 @@ public class ClientApp extends Application {
             startStreamingButton.setDisable(newVal == null);
         });
         
+        leftPanel.getChildren().addAll(videosLabel, videoListView);
+        VBox.setVgrow(videoListView, Priority.ALWAYS);
+        
+        // RIGHT SIDE - Controls and log
+        VBox rightPanel = new VBox(15);
+        rightPanel.setPrefWidth(350);
+        rightPanel.setMaxHeight(Double.MAX_VALUE);
+        
+        // Speed test section
+        VBox speedTestSection = new VBox(5);
+        speedTestSection.getStyleClass().add("panel");
+        speedTestSection.setPadding(new Insets(10));
+        
+        Label speedTestHeading = new Label("Download Speed Test");
+        speedTestHeading.getStyleClass().add("section-label");
+        
+        // Speed test status
+        speedTestStatusLabel = new Label("Testing download speed...");
+        speedTestStatusLabel.setTextFill(Color.GRAY);
+        
+        // Speed display with indicator
+        HBox speedDisplayBox = new HBox(10);
+        speedDisplayBox.setAlignment(Pos.CENTER);
+        
+        speedTestIndicator = new ProgressIndicator(0);
+        speedTestIndicator.setPrefSize(40, 40);
+        
+        speedValueLabel = new Label("0.00 Mbps");
+        speedValueLabel.setFont(Font.font("System", FontWeight.BOLD, 18));
+        
+        speedDisplayBox.getChildren().addAll(speedTestIndicator, speedValueLabel);
+        
+        speedTestSection.getChildren().addAll(speedTestHeading, speedTestStatusLabel, speedDisplayBox);
+        
+        // Format selection section
+        VBox formatSection = new VBox(5);
+        formatSection.getStyleClass().add("panel");
+        formatSection.setPadding(new Insets(10));
+        
+        Label formatLabel = new Label("Video Format");
+        formatLabel.getStyleClass().add("section-label");
+        
+        formatComboBox = new ComboBox<>();
+        formatComboBox.getItems().addAll("mp4", "avi", "mkv");
+        formatComboBox.setValue("mp4");
+        formatComboBox.setDisable(true); // Initially disabled until speed test completes
+        formatComboBox.setPrefWidth(Double.MAX_VALUE);
+        
+        // Add network progress section
+        HBox networkStatusBox = new HBox(10);
+        networkStatusBox.setAlignment(Pos.CENTER_LEFT);
+        
+        networkProgressIndicator = new ProgressIndicator(-1);
+        networkProgressIndicator.setPrefSize(24, 24);
+        networkProgressIndicator.setVisible(false);
+        
+        networkStatusLabel = new Label("Ready to request videos");
+        
+        networkStatusBox.getChildren().addAll(networkProgressIndicator, networkStatusLabel);
+        
+        formatSection.getChildren().addAll(formatLabel, formatComboBox, networkStatusBox);
+        
         // Log section
+        VBox logSection = new VBox(10);
+        logSection.getStyleClass().add("panel");
+        logSection.setPadding(new Insets(10));
+        logSection.setMaxHeight(Double.MAX_VALUE);
+        
         Label logLabel = new Label("Client Log");
-        logLabel.getStyleClass().add("section-header");
+        logLabel.getStyleClass().add("section-label");
+        
         logArea = new TextArea();
         logArea.getStyleClass().add("log-area");
         logArea.setEditable(false);
-        logArea.setPrefHeight(150);
+        logArea.setPrefHeight(200);
         
         // Button section
         HBox buttonBox = new HBox(10);
         buttonBox.setAlignment(Pos.CENTER_RIGHT);
+        buttonBox.setPadding(new Insets(10, 0, 0, 0));
+        
         startStreamingButton = new Button("Start Streaming");
+        startStreamingButton.setPrefWidth(120);
         startStreamingButton.setDisable(true); // Initially disabled
         startStreamingButton.setOnAction(event -> handleStartStreamingButtonClick());
         
         stopStreamingButton = new Button("Stop Streaming");
+        stopStreamingButton.setPrefWidth(120);
         stopStreamingButton.setDisable(true); // Initially disabled
         stopStreamingButton.setOnAction(event -> handleStopStreamingButtonClick());
         
         buttonBox.getChildren().addAll(stopStreamingButton, startStreamingButton);
         
-        // Add all sections to content area
-        contentVBox.getChildren().addAll(
-                speedTestSection, 
-                formatSection, 
-                new Separator(), 
-                videosLabel, 
-                videoListView, 
-                new Separator(), 
-                logLabel, 
-                logArea, 
-                buttonBox
-        );
+        logSection.getChildren().addAll(logLabel, logArea, buttonBox);
+        VBox.setVgrow(logArea, Priority.ALWAYS);
         
-        root.setCenter(contentVBox);
+        // Add all sections to right panel
+        rightPanel.getChildren().addAll(speedTestSection, formatSection, logSection);
+        VBox.setVgrow(logSection, Priority.ALWAYS);
         
-        // Initialize scene
-        Scene scene = new Scene(root, 600, 600);
+        // Add both panels to the content container
+        contentContainer.getChildren().addAll(leftPanel, rightPanel);
+        HBox.setHgrow(leftPanel, Priority.ALWAYS);
+        HBox.setHgrow(rightPanel, Priority.NEVER);
+        
+        root.setCenter(contentContainer);
+        
+        // Initialize scene with same size as server
+        Scene scene = new Scene(root, 900, 600);
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
         
         primaryStage.setScene(scene);
+        primaryStage.setMinWidth(800);
+        primaryStage.setMinHeight(500);
         primaryStage.show();
         
         // Add initial log message
@@ -294,6 +317,11 @@ public class ClientApp extends Application {
             
             log(speedRating);
             log("Please select a video format to continue.");
+            
+            // Automatically request videos with the default format
+            String selectedFormat = formatComboBox.getValue();
+            log("Automatically requesting videos with format: " + selectedFormat);
+            requestVideosFromServer(selectedFormat);
         });
         
         // Handle task failure
@@ -316,6 +344,11 @@ public class ClientApp extends Application {
             
             log("Using default speed value of 10.0 Mbps");
             log("Please select a video format to continue.");
+            
+            // Automatically request videos with the default format
+            String selectedFormat = formatComboBox.getValue();
+            log("Automatically requesting videos with format: " + selectedFormat);
+            requestVideosFromServer(selectedFormat);
         });
         
         // Start the task
@@ -359,8 +392,22 @@ public class ClientApp extends Application {
             networkStatusLabel.setText("Received " + videos.size() + " videos");
             networkStatusLabel.setTextFill(Color.GREEN);
             
-            // Add videos to the list
-            videoItems.addAll(videos);
+            log("DEBUG: Received " + videos.size() + " videos from server");
+            for (Video video : videos) {
+                log("DEBUG: Video: " + video.getName() + " (" + video.getResolution() + ", " + video.getFormat() + ")");
+            }
+            
+            // Add videos to the list on the JavaFX application thread
+            Platform.runLater(() -> {
+                log("DEBUG: Clearing existing videos");
+                videoItems.clear();
+                
+                log("DEBUG: Adding videos to the list");
+                videoItems.addAll(videos);
+                
+                log("DEBUG: Video list size after adding: " + videoItems.size());
+                log("DEBUG: ListView item count: " + videoListView.getItems().size());
+            });
             
             log("Received " + videos.size() + " compatible videos from server");
             log("Ready to stream. Select a video to begin.");

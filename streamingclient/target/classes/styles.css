@@ -1,37 +1,51 @@
 .root {
     -fx-font-family: "Arial";
-    -fx-background-color: #f5f5f5;
+    -fx-background-color: #f5f5f7;
     -fx-padding: 10;
 }
 
 .header-label {
-    -fx-font-size: 24px;
+    -fx-font-size: 18px;
     -fx-font-weight: bold;
-    -fx-padding: 10 0 20 0;
+    -fx-text-fill: #2c3e50;
+    -fx-padding: 0 0 10 0;
+}
+
+.section-label {
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2c3e50;
 }
 
 .video-list {
     -fx-background-color: white;
-    -fx-border-color: #cccccc;
+    -fx-background-radius: 5;
     -fx-border-radius: 5;
+    -fx-border-color: #e0e0e0;
 }
 
 .log-area {
     -fx-font-family: "Consolas", "Monaco", monospace;
     -fx-font-size: 12px;
-    -fx-background-color: #f8f8f8;
-    -fx-border-color: #cccccc;
+    -fx-background-radius: 5;
     -fx-border-radius: 5;
+    -fx-border-color: #e0e0e0;
 }
 
-.section-header {
-    -fx-font-size: 16px;
-    -fx-font-weight: bold;
-    -fx-padding: 5 0 5 0;
+.text-area .content {
+    -fx-background-color: #fafafa;
+}
+
+.panel {
+    -fx-background-color: white;
+    -fx-background-radius: 5;
+    -fx-border-radius: 5;
+    -fx-border-color: #e0e0e0;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.1), 5, 0, 0, 1);
 }
 
 .button {
-    -fx-background-color: #4286f4;
+    -fx-background-color: #3498db;
     -fx-text-fill: white;
     -fx-font-weight: bold;
     -fx-cursor: hand;
@@ -41,24 +55,38 @@
 }
 
 .button:hover {
-    -fx-background-color: #3272e0;
+    -fx-background-color: #2980b9;
 }
 
 .button:disabled {
-    -fx-background-color: #cccccc;
-    -fx-text-fill: #666666;
+    -fx-background-color: #95a5a6;
+    -fx-opacity: 0.7;
 }
 
 .progress-indicator .percentage {
-    -fx-fill: #4286f4;
+    -fx-fill: #3498db;
 }
 
 .combo-box {
     -fx-background-color: white;
-    -fx-border-color: #cccccc;
+    -fx-border-color: #e0e0e0;
     -fx-border-radius: 3;
 }
 
 .combo-box:hover {
-    -fx-border-color: #4286f4;
+    -fx-border-color: #3498db;
+}
+
+.scroll-bar:vertical {
+    -fx-background-color: #f0f0f0;
+    -fx-background-radius: 0;
+}
+
+.scroll-bar:vertical .thumb {
+    -fx-background-color: #c0c0c0;
+    -fx-background-radius: 5;
+}
+
+.scroll-bar:vertical .thumb:hover {
+    -fx-background-color: #a0a0a0;
 } 

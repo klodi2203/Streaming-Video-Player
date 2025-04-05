@@ -24,6 +24,9 @@ import java.util.logging.Logger;
 public class StreamingUtil {
     
     private static final Logger LOGGER = Logger.getLogger(StreamingUtil.class.getName());
+    static {
+        LoggingUtil.configureLogger(LOGGER);
+    }
     
     // FFMPEG executable path - could be configured based on OS
     private static final String FFMPEG_PATH = "ffmpeg";
@@ -60,10 +63,14 @@ public class StreamingUtil {
             Runnable completionCallback) throws IOException {
         
         if (isStreaming.get()) {
+            LoggingUtil.logWithUi(LOGGER, Level.INFO, "STREAM_CONTROL", 
+                    "Stopping existing stream before starting a new one", outputCallback);
             stopStreaming();
         }
         
         isStreaming.set(true);
+        LoggingUtil.logStreaming(LOGGER, protocol.toString(), "STARTING", 
+                "Initiating " + protocol + " streaming for " + video.getName(), outputCallback);
         
         // For debug/demo purposes, check if we can directly play the file
         // Note: This is just for testing and should be removed in a real app
@@ -71,7 +78,8 @@ public class StreamingUtil {
         if (urlString != null && !urlString.isEmpty()) {
             File directFile = new File(urlString);
             if (directFile.exists() && directFile.isFile() && directFile.canRead()) {
-                outputCallback.accept("DEBUG MODE: Direct file access detected. Playing file directly: " + urlString);
+                LoggingUtil.logStreaming(LOGGER, protocol.toString(), "DIRECT_PLAY", 
+                        "Direct file access detected for " + urlString, outputCallback);
                 playVideo(urlString, outputCallback);
                 return;
             }
@@ -82,7 +90,8 @@ public class StreamingUtil {
                 "_" + System.currentTimeMillis() + "." + video.getFormat();
         String tempFilePath = Paths.get(TEMP_DIR, tempFilename).toString();
         
-        outputCallback.accept("Setting up FFMPEG to receive stream...");
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "FFMPEG", 
+                "Setting up FFMPEG to receive stream", outputCallback);
         
         // Build the FFMPEG command based on the selected protocol
         List<String> command = new ArrayList<>();
@@ -90,22 +99,29 @@ public class StreamingUtil {
         
         // Get a random local port to avoid binding issues
         int localPort = 10000 + RANDOM.nextInt(50000);
+        LoggingUtil.info(LOGGER, "NETWORK", "Using local port " + localPort + " for receiving stream");
         
         // Input options based on protocol
         switch (protocol) {
             case TCP:
                 command.add("-i");
                 command.add("tcp://" + SERVER_HOST + ":" + TCP_PORT);
+                LoggingUtil.logNetworkActivity(LOGGER, "CONNECTING", "tcp://" + SERVER_HOST + ":" + TCP_PORT,
+                        "TCP Stream", "Using TCP protocol", outputCallback);
                 break;
             case UDP:
                 command.add("-i");
                 command.add("udp://" + SERVER_HOST + ":" + UDP_PORT + "?localport=" + localPort);
+                LoggingUtil.logNetworkActivity(LOGGER, "CONNECTING", "udp://" + SERVER_HOST + ":" + UDP_PORT,
+                        "UDP Stream", "Using UDP protocol with localport=" + localPort, outputCallback);
                 break;
             case RTP_UDP:
                 command.add("-protocol_whitelist");
                 command.add("file,rtp,udp");
                 command.add("-i");
                 command.add("rtp://" + SERVER_HOST + ":" + RTP_PORT + "?localport=" + localPort);
+                LoggingUtil.logNetworkActivity(LOGGER, "CONNECTING", "rtp://" + SERVER_HOST + ":" + RTP_PORT,
+                        "RTP Stream", "Using RTP/UDP protocol with localport=" + localPort, outputCallback);
                 break;
         }
         
@@ -119,13 +135,15 @@ public class StreamingUtil {
         command.add("-y"); // Overwrite output file if it exists
         command.add(tempFilePath);
         
-        outputCallback.accept("Starting FFMPEG with command: " + String.join(" ", command));
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "FFMPEG", 
+                "Starting FFMPEG with command: " + String.join(" ", command), outputCallback);
         
         // Start FFMPEG process
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true); // Redirect error stream to output stream
         
         ffmpegProcess = processBuilder.start();
+        LoggingUtil.info(LOGGER, "FFMPEG", "FFMPEG process started with PID: " + ffmpegProcess.pid());
         
         // Read the output in a separate thread
         new Thread(() -> {
@@ -134,13 +152,14 @@ public class StreamingUtil {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     final String finalLine = line;
-                    LOGGER.info("FFMPEG: " + finalLine);
-                    outputCallback.accept("FFMPEG: " + finalLine);
+                    LoggingUtil.info(LOGGER, "FFMPEG", finalLine);
+                    outputCallback.accept("[FFMPEG] " + finalLine);
                     
                     // Check if FFMPEG has started receiving data
                     if ((line.contains("Input #0") || line.contains("Stream mapping")) && !streamReceived) {
                         streamReceived = true;
-                        outputCallback.accept("FFMPEG is receiving the stream...");
+                        LoggingUtil.logStreaming(LOGGER, protocol.toString(), "RECEIVING", 
+                                "Stream data is being received from server", outputCallback);
                         
                         // Give it a moment to buffer before playing
                         new Thread(() -> {
@@ -150,22 +169,34 @@ public class StreamingUtil {
                                 int maxWaits = 20; // 20 * 500ms = 10 seconds max
                                 int waited = 0;
                                 
+                                LoggingUtil.logWithUi(LOGGER, Level.INFO, "BUFFER", 
+                                        "Waiting for stream data to buffer...", outputCallback);
+                                
                                 while ((!file.exists() || file.length() < 10000) && waited < maxWaits) {
                                     Thread.sleep(500);
                                     waited++;
+                                    
+                                    if (waited % 4 == 0) { // Log every 2 seconds
+                                        LoggingUtil.info(LOGGER, "BUFFER", 
+                                                "Buffering... " + (file.exists() ? 
+                                                file.length() + " bytes received" : "File not created yet"));
+                                    }
                                 }
                                 
                                 if (file.exists() && file.length() > 0 && isStreaming.get()) {
-                                    outputCallback.accept("Starting video player...");
+                                    LoggingUtil.logStreaming(LOGGER, protocol.toString(), "BUFFERED", 
+                                            "Stream buffered (" + file.length() + " bytes), starting player", outputCallback);
                                     playVideo(tempFilePath, outputCallback);
                                 } else {
-                                    outputCallback.accept("Could not start player - insufficient data received.");
+                                    LoggingUtil.logWithUi(LOGGER, Level.WARNING, "BUFFER", 
+                                            "Insufficient data received for playback", outputCallback);
                                 }
                             } catch (InterruptedException e) {
                                 Thread.currentThread().interrupt();
+                                LoggingUtil.error(LOGGER, "THREAD", "Buffer thread interrupted: " + e.getMessage());
                             } catch (IOException e) {
-                                LOGGER.log(Level.SEVERE, "Error starting video player", e);
-                                outputCallback.accept("Error starting video player: " + e.getMessage());
+                                LoggingUtil.logWithUi(LOGGER, Level.SEVERE, "PLAYER", 
+                                        "Error starting video player: " + e.getMessage(), outputCallback);
                             }
                         }).start();
                     }
@@ -173,17 +204,19 @@ public class StreamingUtil {
                 
                 // FFMPEG process has exited
                 int exitCode = ffmpegProcess.waitFor();
-                outputCallback.accept("FFMPEG process completed with exit code: " + exitCode);
+                LoggingUtil.logWithUi(LOGGER, Level.INFO, "FFMPEG", 
+                        "FFMPEG process completed with exit code: " + exitCode, outputCallback);
                 
                 // Check if we have a valid output file to play
                 File outputFile = new File(tempFilePath);
                 if (!streamReceived && outputFile.exists() && outputFile.length() > 0) {
-                    outputCallback.accept("Video received, starting player...");
+                    LoggingUtil.logStreaming(LOGGER, protocol.toString(), "COMPLETED", 
+                            "Stream completed, file saved (" + formatSize(outputFile.length()) + ")", outputCallback);
                     try {
                         playVideo(tempFilePath, outputCallback);
                     } catch (IOException e) {
-                        LOGGER.log(Level.SEVERE, "Error starting video player", e);
-                        outputCallback.accept("Error starting video player: " + e.getMessage());
+                        LoggingUtil.logWithUi(LOGGER, Level.SEVERE, "PLAYER", 
+                                "Error starting video player: " + e.getMessage(), outputCallback);
                     }
                 }
                 
@@ -192,19 +225,22 @@ public class StreamingUtil {
                 ffmpegProcess = null;
                 
                 // Call completion callback
+                LoggingUtil.logStreaming(LOGGER, protocol.toString(), "FINISHED", 
+                        "Streaming session ended", outputCallback);
                 completionCallback.run();
                 
             } catch (IOException e) {
-                LOGGER.log(Level.SEVERE, "Error reading FFMPEG output", e);
-                outputCallback.accept("Error reading FFMPEG output: " + e.getMessage());
+                LoggingUtil.logWithUi(LOGGER, Level.SEVERE, "FFMPEG", 
+                        "Error reading FFMPEG output: " + e.getMessage(), outputCallback);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                LOGGER.log(Level.SEVERE, "FFMPEG process interrupted", e);
-                outputCallback.accept("FFMPEG process interrupted");
+                LoggingUtil.logWithUi(LOGGER, Level.SEVERE, "FFMPEG", 
+                        "FFMPEG process interrupted", outputCallback);
             }
         }).start();
         
-        outputCallback.accept("Waiting for stream to start...");
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "STREAM_CONTROL", 
+                "Stream initialization complete, waiting for data...", outputCallback);
     }
     
     /**
@@ -217,21 +253,26 @@ public class StreamingUtil {
     private static void playVideo(String videoPath, Consumer<String> outputCallback) throws IOException {
         File videoFile = new File(videoPath);
         if (!videoFile.exists()) {
-            throw new IOException("Video file does not exist: " + videoPath);
+            String errorMsg = "Video file does not exist: " + videoPath;
+            LoggingUtil.error(LOGGER, "PLAYER", errorMsg);
+            throw new IOException(errorMsg);
         }
         
         // Make sure the file has some content before trying to play it
         if (videoFile.length() < 1000) {
-            outputCallback.accept("Video file is too small to play: " + videoFile.length() + " bytes");
+            LoggingUtil.logWithUi(LOGGER, Level.WARNING, "PLAYER", 
+                    "Video file is too small to play: " + videoFile.length() + " bytes", outputCallback);
             return;
         }
         
-        outputCallback.accept("Starting video player for: " + videoPath);
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                "Starting system video player for: " + videoPath, outputCallback);
         
         List<String> command = new ArrayList<>();
         
         // Use the appropriate command based on OS
         String os = System.getProperty("os.name").toLowerCase();
+        LoggingUtil.info(LOGGER, "SYSTEM", "Detected OS: " + os);
         
         if (os.contains("win")) {
             // Windows
@@ -250,22 +291,25 @@ public class StreamingUtil {
             command.add(videoPath);
         }
         
-        outputCallback.accept("Starting system player with command: " + String.join(" ", command));
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                "Player command: " + String.join(" ", command), outputCallback);
         
         // Start the player process
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         playerProcess = processBuilder.start();
+        LoggingUtil.info(LOGGER, "PLAYER", "Player process started with PID: " + playerProcess.pid());
         
         // Log when the player process completes
         new Thread(() -> {
             try {
                 int exitCode = playerProcess.waitFor();
-                outputCallback.accept("Video player exited with code: " + exitCode);
+                LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                        "Video player exited with code: " + exitCode, outputCallback);
                 playerProcess = null;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                LOGGER.log(Level.SEVERE, "Player process interrupted", e);
-                outputCallback.accept("Player process interrupted");
+                LoggingUtil.error(LOGGER, "THREAD", "Player process interrupted: " + e.getMessage());
+                outputCallback.accept("[PLAYER] Process interrupted");
             }
         }).start();
     }
@@ -274,18 +318,22 @@ public class StreamingUtil {
      * Stop the current streaming session
      */
     public static void stopStreaming() {
+        LoggingUtil.info(LOGGER, "STREAM_CONTROL", "Stopping streaming session");
+        
         if (ffmpegProcess != null) {
+            LoggingUtil.info(LOGGER, "FFMPEG", "Stopping FFMPEG process");
             ffmpegProcess.destroy();
             ffmpegProcess = null;
         }
         
         if (playerProcess != null) {
+            LoggingUtil.info(LOGGER, "PLAYER", "Stopping video player process");
             playerProcess.destroy();
             playerProcess = null;
         }
         
         isStreaming.set(false);
-        LOGGER.info("Streaming stopped");
+        LoggingUtil.info(LOGGER, "STREAM_CONTROL", "Streaming stopped");
     }
     
     /**
@@ -294,12 +342,23 @@ public class StreamingUtil {
      * @return true if FFMPEG is available, false otherwise
      */
     public static boolean isFFmpegAvailable() {
+        LoggingUtil.info(LOGGER, "SYSTEM", "Checking FFMPEG availability");
         try {
             Process process = new ProcessBuilder(FFMPEG_PATH, "-version").start();
+            
+            // Read the version information
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String versionLine = reader.readLine();
+                LoggingUtil.info(LOGGER, "FFMPEG", "Found FFMPEG: " + versionLine);
+            }
+            
             int exitCode = process.waitFor();
-            return exitCode == 0;
+            boolean available = exitCode == 0;
+            LoggingUtil.info(LOGGER, "SYSTEM", "FFMPEG availability check result: " + 
+                    (available ? "AVAILABLE" : "NOT AVAILABLE"));
+            return available;
         } catch (IOException | InterruptedException e) {
-            LOGGER.log(Level.WARNING, "FFMPEG check failed", e);
+            LoggingUtil.error(LOGGER, "SYSTEM", "FFMPEG check failed: " + e.getMessage());
             return false;
         }
     }
@@ -308,6 +367,7 @@ public class StreamingUtil {
      * Delete all temporary streaming files
      */
     public static void cleanupTempFiles() {
+        LoggingUtil.info(LOGGER, "CLEANUP", "Cleaning up temporary streaming files in: " + TEMP_DIR);
         try {
             Files.walk(Paths.get(TEMP_DIR))
                 .filter(path -> {
@@ -320,13 +380,29 @@ public class StreamingUtil {
                 .forEach(path -> {
                     try {
                         Files.delete(path);
-                        LOGGER.info("Deleted temporary file: " + path);
+                        LoggingUtil.info(LOGGER, "CLEANUP", "Deleted temporary file: " + path);
                     } catch (IOException e) {
-                        LOGGER.log(Level.WARNING, "Failed to delete temporary file: " + path, e);
+                        LoggingUtil.warning(LOGGER, "CLEANUP", "Failed to delete temporary file: " + path);
                     }
                 });
+            LoggingUtil.info(LOGGER, "CLEANUP", "Temporary file cleanup completed");
         } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Error cleaning up temporary files", e);
+            LoggingUtil.error(LOGGER, "CLEANUP", "Error cleaning up temporary files: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Format a size in bytes to a human-readable string
+     */
+    private static String formatSize(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        } else if (bytes < 1024 * 1024) {
+            return String.format("%.2f KB", bytes / 1024.0);
+        } else if (bytes < 1024 * 1024 * 1024) {
+            return String.format("%.2f MB", bytes / (1024.0 * 1024));
+        } else {
+            return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
         }
     }
 } 

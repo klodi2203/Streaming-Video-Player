@@ -2,6 +2,7 @@ package com.videostreaming.client.service;
 
 import com.videostreaming.client.dialog.ProtocolSelectionDialog.StreamingProtocol;
 import com.videostreaming.client.model.Video;
+import com.videostreaming.client.util.LoggingUtil;
 import javafx.concurrent.Service;
 import javafx.concurrent.Task;
 
@@ -23,6 +24,9 @@ import java.util.logging.Logger;
 public class NetworkService {
     
     private static final Logger LOGGER = Logger.getLogger(NetworkService.class.getName());
+    static {
+        LoggingUtil.configureLogger(LOGGER);
+    }
     
     // Server settings
     private static final String SERVER_BASE_URL = "http://localhost:8080";
@@ -45,16 +49,20 @@ public class NetworkService {
                     @Override
                     protected List<Video> call() throws Exception {
                         updateMessage("Connecting to server...");
+                        LoggingUtil.logWithUi(LOGGER, Level.INFO, "VIDEO_REQUEST", 
+                                "Initiating video request with speed=" + speed + " Mbps, format=" + format, 
+                                this::updateMessage);
                         
                         try {
                             // Connect to the server API endpoint
                             String requestUrl = SERVER_BASE_URL + API_LIST_VIDEOS;
-                            LOGGER.info("Sending request to: " + requestUrl);
-                            updateMessage("Sending request to server...");
+                            LoggingUtil.logNetworkActivity(LOGGER, "CONNECTING", requestUrl, 
+                                    "API Request", null, this::updateMessage);
                             
                             // Create the request payload
                             String payload = String.format("{\"speed\":%.2f,\"format\":\"%s\"}", speed, format);
-                            LOGGER.info("Sending request: " + payload);
+                            LoggingUtil.logNetworkActivity(LOGGER, "SENDING", requestUrl, 
+                                    "API Request", "Payload: " + payload, this::updateMessage);
                             
                             // Create the HTTP connection
                             URL url = new URL(requestUrl);
@@ -65,7 +73,7 @@ public class NetworkService {
                             connection.setConnectTimeout(5000);
                             connection.setReadTimeout(5000);
                             
-                            updateProgress(20, 100);
+                            updateProgress(10, 100);
                             
                             // Send request data
                             try (OutputStream os = connection.getOutputStream()) {
@@ -73,17 +81,21 @@ public class NetworkService {
                                 os.write(input, 0, input.length);
                             }
                             
-                            updateProgress(40, 100);
-                            updateMessage("Waiting for server response...");
+                            updateProgress(30, 100);
+                            LoggingUtil.logNetworkActivity(LOGGER, "SENT", requestUrl, 
+                                    "API Request", "Waiting for response...", this::updateMessage);
                             
                             // Check response status
                             int responseCode = connection.getResponseCode();
                             if (responseCode != 200) {
+                                LoggingUtil.logNetworkActivity(LOGGER, "ERROR", requestUrl, 
+                                        "API Response", "Server returned error code: " + responseCode, this::updateMessage);
                                 throw new RuntimeException("Server returned error code: " + responseCode);
                             }
                             
                             updateProgress(60, 100);
-                            updateMessage("Receiving video list...");
+                            LoggingUtil.logNetworkActivity(LOGGER, "RECEIVED", requestUrl, 
+                                    "API Response", "Status code: 200 OK", this::updateMessage);
                             
                             // Read response
                             StringBuilder response = new StringBuilder();
@@ -95,126 +107,33 @@ public class NetworkService {
                                 }
                             }
                             
-                            updateProgress(80, 100);
+                            String jsonResponse = response.toString();
+                            LoggingUtil.logNetworkActivity(LOGGER, "PROCESSING", requestUrl, 
+                                    "API Response", "Parsing JSON data", this::updateMessage);
                             
-                            // Parse JSON response
-                            String json = response.toString();
-                            LOGGER.info("Received response: " + json);
-                            
-                            List<Video> videos = parseVideoList(json);
+                            // Parse the response to get the list of videos
+                            List<Video> videos = parseVideoList(jsonResponse);
                             
                             updateProgress(100, 100);
-                            updateMessage("Received " + videos.size() + " videos");
-                            LOGGER.info("Parsed " + videos.size() + " videos from server response");
+                            LoggingUtil.logWithUi(LOGGER, Level.INFO, "VIDEO_REQUEST", 
+                                    "Received " + videos.size() + " compatible videos from server", 
+                                    this::updateMessage);
                             
                             return videos;
                             
                         } catch (Exception e) {
-                            LOGGER.log(Level.SEVERE, "Error communicating with server", e);
+                            LoggingUtil.error(LOGGER, "VIDEO_REQUEST", 
+                                    "Error requesting videos: " + e.getMessage());
                             updateMessage("Error: " + e.getMessage());
                             
-                            // If server communication fails, try to use simulated data instead
-                            LOGGER.info("Using simulated video data as fallback");
-                            List<Video> videos = simulateVideoResponse(speed, format);
-                            updateProgress(100, 100);
-                            updateMessage("Using simulated data: " + videos.size() + " videos");
+                            // If server communication fails, simulate a response for demonstration
+                            LoggingUtil.warning(LOGGER, "VIDEO_REQUEST", 
+                                    "Using simulated video response as fallback");
+                            updateMessage("Using simulated data (server unavailable)");
                             
-                            return videos;
+                            List<Video> simulatedVideos = simulateVideoResponse(speed, format);
+                            return simulatedVideos;
                         }
-                    }
-                    
-                    /**
-                     * Parse the video list from the JSON response
-                     */
-                    private List<Video> parseVideoList(String json) {
-                        List<Video> videos = new ArrayList<>();
-                        
-                        try {
-                            // Find the start of the videos array
-                            int videosStart = json.indexOf("\"videos\":[");
-                            if (videosStart == -1) {
-                                LOGGER.warning("Couldn't find videos array in response");
-                                return videos;
-                            }
-                            
-                            videosStart = json.indexOf("[", videosStart);
-                            int videosEnd = json.lastIndexOf("]");
-                            
-                            if (videosStart == -1 || videosEnd == -1) {
-                                LOGGER.warning("Invalid videos array in response");
-                                return videos;
-                            }
-                            
-                            // Extract the videos array
-                            String videosArray = json.substring(videosStart + 1, videosEnd);
-                            
-                            // Check if the array is empty
-                            if (videosArray.trim().isEmpty()) {
-                                return videos;
-                            }
-                            
-                            // Split the array into individual video objects
-                            int objStart = 0;
-                            int nestingLevel = 0;
-                            
-                            for (int i = 0; i < videosArray.length(); i++) {
-                                char c = videosArray.charAt(i);
-                                
-                                if (c == '{') {
-                                    if (nestingLevel == 0) {
-                                        objStart = i;
-                                    }
-                                    nestingLevel++;
-                                } else if (c == '}') {
-                                    nestingLevel--;
-                                    if (nestingLevel == 0) {
-                                        // Found a complete object
-                                        String videoObj = videosArray.substring(objStart, i + 1);
-                                        Video video = parseVideo(videoObj);
-                                        if (video != null) {
-                                            videos.add(video);
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            return videos;
-                        } catch (Exception e) {
-                            LOGGER.log(Level.SEVERE, "Error parsing video list", e);
-                            return videos;
-                        }
-                    }
-                    
-                    /**
-                     * Parse a video object from a JSON string
-                     */
-                    private Video parseVideo(String json) {
-                        try {
-                            String name = extractValue(json, "name");
-                            String resolution = extractValue(json, "resolution");
-                            String format = extractValue(json, "format");
-                            String url = extractValue(json, "url");
-                            
-                            return new Video(name, resolution, format, url);
-                        } catch (Exception e) {
-                            LOGGER.log(Level.WARNING, "Error parsing video", e);
-                            return null;
-                        }
-                    }
-                    
-                    /**
-                     * Extract a value from a simple JSON string
-                     */
-                    private String extractValue(String json, String key) {
-                        int startIndex = json.indexOf("\"" + key + "\":\"");
-                        if (startIndex == -1) return "";
-                        
-                        startIndex += key.length() + 4; // Skip past the key and ":"
-                        int endIndex = json.indexOf("\"", startIndex);
-                        
-                        if (endIndex == -1) return "";
-                        
-                        return json.substring(startIndex, endIndex);
                     }
                 };
             }
@@ -235,19 +154,23 @@ public class NetworkService {
                 return new Task<>() {
                     @Override
                     protected Boolean call() throws Exception {
-                        updateMessage("Sending streaming request to server...");
+                        LoggingUtil.logWithUi(LOGGER, Level.INFO, "STREAM_REQUEST", 
+                                "Initiating streaming request for " + video.getName() + 
+                                " using " + protocol + " protocol", this::updateMessage);
                         
                         try {
                             // Connect to the server API endpoint
                             String requestUrl = SERVER_BASE_URL + API_REQUEST_VIDEO;
-                            LOGGER.info("Sending streaming request to: " + requestUrl);
+                            LoggingUtil.logNetworkActivity(LOGGER, "CONNECTING", requestUrl, 
+                                    "Stream Request", null, this::updateMessage);
                             
                             // Create the request payload
                             String payload = String.format(
                                 "{\"videoName\":\"%s\",\"resolution\":\"%s\",\"format\":\"%s\",\"protocol\":\"%s\"}",
                                 video.getName(), video.getResolution(), video.getFormat(), protocol.toString()
                             );
-                            LOGGER.info("Sending request: " + payload);
+                            LoggingUtil.logNetworkActivity(LOGGER, "SENDING", requestUrl, 
+                                    "Stream Request", "Payload: " + payload, this::updateMessage);
                             
                             // Create the HTTP connection
                             URL url = new URL(requestUrl);
@@ -267,15 +190,20 @@ public class NetworkService {
                             }
                             
                             updateProgress(60, 100);
-                            updateMessage("Waiting for server response...");
+                            LoggingUtil.logNetworkActivity(LOGGER, "SENT", requestUrl, 
+                                    "Stream Request", "Waiting for response...", this::updateMessage);
                             
                             // Check response status
                             int responseCode = connection.getResponseCode();
                             if (responseCode != 200) {
+                                LoggingUtil.logNetworkActivity(LOGGER, "ERROR", requestUrl, 
+                                        "Stream Response", "Server returned error code: " + responseCode, this::updateMessage);
                                 throw new RuntimeException("Server returned error code: " + responseCode);
                             }
                             
                             updateProgress(80, 100);
+                            LoggingUtil.logNetworkActivity(LOGGER, "RECEIVED", requestUrl, 
+                                    "Stream Response", "Status code: 200 OK", this::updateMessage);
                             
                             // Read response
                             StringBuilder response = new StringBuilder();
@@ -288,23 +216,28 @@ public class NetworkService {
                             }
                             
                             String result = response.toString();
-                            LOGGER.info("Received response: " + result);
+                            LoggingUtil.logNetworkActivity(LOGGER, "PROCESSING", requestUrl, 
+                                    "Stream Response", "Response: " + result, this::updateMessage);
                             
                             updateProgress(100, 100);
-                            updateMessage("Stream request processed");
+                            LoggingUtil.logStreaming(LOGGER, protocol.toString(), "INITIALIZED", 
+                                    "Server accepted streaming request", this::updateMessage);
                             
                             // In a real application, this would establish the stream connection
                             // For now, we just return success if the server accepted the request
                             return true;
                             
                         } catch (Exception e) {
-                            LOGGER.log(Level.SEVERE, "Error sending streaming request", e);
+                            LoggingUtil.error(LOGGER, "STREAM_REQUEST", 
+                                    "Error sending streaming request: " + e.getMessage());
                             updateMessage("Error: " + e.getMessage());
                             
                             // If server communication fails, simulate success for demonstration
-                            LOGGER.info("Simulating streaming response as fallback");
+                            LoggingUtil.warning(LOGGER, "STREAM_REQUEST", 
+                                    "Simulating streaming response as fallback");
                             updateProgress(100, 100);
-                            updateMessage("Using simulated streaming (server unavailable)");
+                            LoggingUtil.logStreaming(LOGGER, protocol.toString(), "SIMULATED", 
+                                    "Server unavailable, using direct file access", this::updateMessage);
                             
                             return true;
                         }
@@ -315,35 +248,105 @@ public class NetworkService {
     }
     
     /**
-     * In a real application, this would parse the server response.
-     * For now, we'll simulate a response based on the inputs.
-     * This is used as a fallback when server communication fails.
+     * Simulate a video response for demonstration purposes when the server is unavailable
      */
     private static List<Video> simulateVideoResponse(double speed, String format) {
+        LoggingUtil.info(LOGGER, "SIMULATION", "Generating simulated video list for " + 
+                format + " with speed " + speed + " Mbps");
+        
         List<Video> videos = new ArrayList<>();
+        String[] names = {"Nature Documentary", "Action Movie", "Comedy Show"};
+        String[] resolutions = {"240p", "360p", "480p", "720p", "1080p"};
         
-        // Different video options based on format
-        if ("mp4".equals(format)) {
-            videos.add(new Video("Earth Documentary", "720p", format, "http://example.com/earth-720p.mp4"));
-            videos.add(new Video("Space Exploration", "480p", format, "http://example.com/space-480p.mp4"));
-            videos.add(new Video("Ocean Life", "1080p", format, "http://example.com/ocean-1080p.mp4"));
-        } else if ("avi".equals(format)) {
-            videos.add(new Video("Wildlife", "720p", format, "http://example.com/wildlife-720p.avi"));
-            videos.add(new Video("Mountains", "480p", format, "http://example.com/mountains-480p.avi"));
-        } else if ("mkv".equals(format)) {
-            videos.add(new Video("City Tour", "1080p", format, "http://example.com/city-1080p.mkv"));
-            videos.add(new Video("Forest Journey", "720p", format, "http://example.com/forest-720p.mkv"));
+        // Filter resolutions based on speed
+        int maxResIndex = 4; // Default to all resolutions
+        if (speed < 2.0) {
+            maxResIndex = 1; // Only 240p and 360p
+        } else if (speed < 5.0) {
+            maxResIndex = 2; // Up to 480p
+        } else if (speed < 10.0) {
+            maxResIndex = 3; // Up to 720p
         }
         
-        // Add common videos
-        videos.add(new Video("Tutorial Video", "480p", format, "http://example.com/tutorial-480p." + format));
-        videos.add(new Video("Sample Video", "720p", format, "http://example.com/sample-720p." + format));
-        
-        // If the speed is low, remove high resolution videos
-        if (speed < 5.0) {
-            videos.removeIf(video -> "1080p".equals(video.getResolution()));
+        // Generate videos
+        for (String name : names) {
+            for (int i = 0; i <= maxResIndex; i++) {
+                Video video = new Video(name, resolutions[i], format, "file:///simulated/video/" + name + "." + format);
+                videos.add(video);
+            }
         }
         
+        LoggingUtil.info(LOGGER, "SIMULATION", "Generated " + videos.size() + " simulated videos");
         return videos;
+    }
+    
+    /**
+     * Parse a JSON response to get a list of videos
+     */
+    private static List<Video> parseVideoList(String json) {
+        List<Video> videoList = new ArrayList<>();
+        
+        try {
+            // Extract the videos array from the JSON
+            int videosStart = json.indexOf("\"videos\":[") + 9;
+            int videosEnd = json.lastIndexOf("]");
+            
+            if (videosStart > 9 && videosEnd > videosStart) {
+                String videosJson = json.substring(videosStart, videosEnd + 1);
+                
+                // Remove the brackets
+                String videosContent = videosJson.substring(1, videosJson.length() - 1).trim();
+                
+                // If there are videos
+                if (!videosContent.isEmpty()) {
+                    // Split by },{
+                    String[] videoJsonArray = videosContent.split("\\},\\{");
+                    
+                    for (int i = 0; i < videoJsonArray.length; i++) {
+                        String videoJson = videoJsonArray[i];
+                        
+                        // Add brackets if they were removed by the split
+                        if (!videoJson.startsWith("{")) {
+                            videoJson = "{" + videoJson;
+                        }
+                        if (!videoJson.endsWith("}")) {
+                            videoJson = videoJson + "}";
+                        }
+                        
+                        // Extract video properties
+                        String name = extractValue(videoJson, "name");
+                        String resolution = extractValue(videoJson, "resolution");
+                        String format = extractValue(videoJson, "format");
+                        String url = extractValue(videoJson, "url");
+                        
+                        // Create and add the video
+                        Video video = new Video(name, resolution, format, url);
+                        videoList.add(video);
+                        
+                        LoggingUtil.info(LOGGER, "PARSER", "Parsed video: " + name + 
+                                " (" + resolution + ", " + format + ")");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LoggingUtil.error(LOGGER, "PARSER", "Error parsing video list: " + e.getMessage());
+        }
+        
+        return videoList;
+    }
+    
+    /**
+     * Extract a value from a simple JSON string
+     */
+    private static String extractValue(String json, String key) {
+        int startIndex = json.indexOf("\"" + key + "\":\"");
+        if (startIndex == -1) return "";
+        
+        startIndex += key.length() + 4; // Skip past the key and ":"
+        int endIndex = json.indexOf("\"", startIndex);
+        
+        if (endIndex == -1) return "";
+        
+        return json.substring(startIndex, endIndex);
     }
 } 

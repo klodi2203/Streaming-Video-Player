@@ -5,11 +5,13 @@ com/videostreaming/client/service/NetworkService$1$1.class
 com/videostreaming/client/ClientApp$1$1.class
 com/videostreaming/client/dialog/ProtocolSelectionDialog.class
 com/videostreaming/client/ClientApp$1.class
+com/videostreaming/client/util/LoggingUtil$EnhancedLogFormatter.class
 com/videostreaming/client/util/SpeedTestUtil$1.class
 com/videostreaming/client/ClientApp.class
 com/videostreaming/client/util/SpeedTestUtil$SpeedSample.class
 com/videostreaming/client/util/StreamingUtil.class
 com/videostreaming/client/model/Video.class
+com/videostreaming/client/util/LoggingUtil.class
 com/videostreaming/client/service/NetworkService.class
 com/videostreaming/client/util/StreamingUtil$1.class
 com/videostreaming/client/service/NetworkService$1.class
