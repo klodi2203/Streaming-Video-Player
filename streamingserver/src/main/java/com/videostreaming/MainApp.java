@@ -4,6 +4,7 @@ import com.videostreaming.model.Video;
 import com.videostreaming.service.VideoConversionService;
 import com.videostreaming.service.VideoScanService;
 import com.videostreaming.ui.VideoListCell;
+import com.videostreaming.api.ApiServer;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.collections.ObservableList;
@@ -52,6 +53,7 @@ public class MainApp extends Application {
     private Label statusLabel;
     private VideoScanService videoScanService;
     private VideoConversionService videoConversionService;
+    private ApiServer apiServer;
     
     // Executor for UI updates
     private final ScheduledExecutorService uiUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -153,6 +155,9 @@ public class MainApp extends Application {
 
         // Initialize video scan service
         initVideoScanService();
+        
+        // Initialize API server
+        initApiServer();
         
         // Automatically scan videos directory on startup
         log("Application started");
@@ -427,6 +432,16 @@ public class MainApp extends Application {
         });
     }
 
+    /**
+     * Initialize the API server
+     */
+    private void initApiServer() {
+        // Create and start API server on port 8080
+        apiServer = new ApiServer(8080, videoScanService);
+        apiServer.start();
+        log("API server started on port 8080");
+    }
+
     public static void main(String[] args) {
         launch(args);
     }
@@ -436,6 +451,11 @@ public class MainApp extends Application {
         // Shutdown the scheduled executor service
         if (uiUpdateExecutor != null && !uiUpdateExecutor.isShutdown()) {
             uiUpdateExecutor.shutdownNow();
+        }
+        
+        // Stop API server
+        if (apiServer != null) {
+            apiServer.stop();
         }
     }
 } 
