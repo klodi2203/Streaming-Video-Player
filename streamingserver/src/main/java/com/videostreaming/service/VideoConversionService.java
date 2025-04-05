@@ -13,6 +13,10 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -23,14 +27,38 @@ import java.util.logging.Logger;
 public class VideoConversionService extends Service<Void> {
     
     private static final Logger LOGGER = Logger.getLogger(VideoConversionService.class.getName());
+    private static final int MAX_CONCURRENT_CONVERSIONS = 2;
     
     private final List<Video> videos;
     private final String videoDirectory;
     private final Consumer<String> logConsumer;
-    private final ConcurrentLinkedQueue<String> conversionQueue = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<ConversionJob> conversionQueue = new ConcurrentLinkedQueue<>();
+    private final ExecutorService conversionExecutor;
+    private final List<Future<?>> conversionFutures = new ArrayList<>();
+    private final AtomicInteger totalJobs = new AtomicInteger(0);
+    private final AtomicInteger completedJobs = new AtomicInteger(0);
     
     // Callback for when a new video has been created
     private Consumer<Video> onNewVideoCreated;
+    private boolean ffmpegAvailable = false;
+    private Task<Void> currentTask;
+    
+    // Nested class to hold conversion job info
+    private static class ConversionJob {
+        final String sourcePath;
+        final String targetPath;
+        final String resolution;
+        final String format;
+        final String baseName;
+        
+        ConversionJob(String sourcePath, String targetPath, String resolution, String format, String baseName) {
+            this.sourcePath = sourcePath;
+            this.targetPath = targetPath;
+            this.resolution = resolution;
+            this.format = format;
+            this.baseName = baseName;
+        }
+    }
     
     /**
      * Create a video conversion service
@@ -42,6 +70,7 @@ public class VideoConversionService extends Service<Void> {
         this.videos = videos;
         this.videoDirectory = videoDirectory;
         this.logConsumer = logConsumer;
+        this.conversionExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_CONVERSIONS);
     }
     
     /**
@@ -54,27 +83,125 @@ public class VideoConversionService extends Service<Void> {
     
     @Override
     protected Task<Void> createTask() {
-        return new Task<>() {
-            @Override
-            protected Void call() throws Exception {
-                log("Starting conversion process for " + videos.size() + " videos");
-                
-                // Check if FFMPEG is installed
-                if (!isFFmpegInstalled()) {
-                    log("ERROR: FFMPEG is not installed or not available in PATH");
-                    LOGGER.severe("FFMPEG is not installed or not available in PATH");
-                    return null;
-                }
-                
-                // Process each video
-                for (Video video : videos) {
-                    processVideo(video);
-                }
-                
-                log("Conversion process completed");
+        return new ConversionTask();
+    }
+    
+    /**
+     * Custom Task implementation with public methods to update progress
+     */
+    private class ConversionTask extends Task<Void> {
+        
+        /**
+         * Public method to update progress
+         */
+        public void updateConversionProgress(int completed, int total) {
+            updateProgress(completed, total);
+        }
+        
+        @Override
+        protected Void call() throws Exception {
+            // Store a reference to the current task
+            currentTask = this;
+            
+            log("Starting conversion process for " + videos.size() + " videos");
+            
+            // Reset counters
+            totalJobs.set(0);
+            completedJobs.set(0);
+            conversionQueue.clear();
+            conversionFutures.clear();
+            
+            // Check if FFMPEG is installed
+            ffmpegAvailable = isFFmpegInstalled();
+            if (!ffmpegAvailable) {
+                log("ERROR: FFMPEG is not installed or not available in PATH");
+                LOGGER.severe("FFMPEG is not installed or not available in PATH");
                 return null;
             }
-        };
+            
+            // Process each video to generate conversion jobs
+            for (Video video : videos) {
+                if (isCancelled()) {
+                    break;
+                }
+                processVideo(video);
+            }
+            
+            // Process all jobs from the queue
+            int jobsCount = totalJobs.get();
+            log("Queue prepared with " + jobsCount + " conversion jobs");
+            
+            if (jobsCount == 0) {
+                log("No conversions needed");
+                updateProgress(1, 1);
+                return null;
+            }
+            
+            // Start worker threads to process the queue
+            for (int i = 0; i < MAX_CONCURRENT_CONVERSIONS; i++) {
+                if (isCancelled()) {
+                    break;
+                }
+                
+                Future<?> future = conversionExecutor.submit(() -> {
+                    while (!currentTask.isCancelled() && !conversionQueue.isEmpty()) {
+                        ConversionJob job = conversionQueue.poll();
+                        if (job != null) {
+                            processConversionJob(job);
+                        }
+                    }
+                });
+                
+                conversionFutures.add(future);
+            }
+            
+            // Wait for all conversions to complete
+            for (Future<?> future : conversionFutures) {
+                try {
+                    if (!isCancelled()) {
+                        future.get();
+                    }
+                } catch (Exception e) {
+                    LOGGER.log(Level.SEVERE, "Error waiting for conversion to complete", e);
+                }
+            }
+            
+            if (isCancelled()) {
+                log("Conversion process was canceled");
+                for (Future<?> future : conversionFutures) {
+                    future.cancel(true);
+                }
+            } else {
+                log("Conversion process completed");
+            }
+            
+            return null;
+        }
+        
+        @Override
+        protected void cancelled() {
+            super.cancelled();
+            // Cancel all pending futures
+            for (Future<?> future : conversionFutures) {
+                future.cancel(true);
+            }
+            // Shutdown the executor
+            conversionExecutor.shutdownNow();
+        }
+        
+        @Override
+        protected void succeeded() {
+            super.succeeded();
+            // Shutdown the executor
+            conversionExecutor.shutdown();
+        }
+        
+        @Override
+        protected void failed() {
+            super.failed();
+            // Shutdown the executor
+            conversionExecutor.shutdownNow();
+        }
     }
     
     /**
@@ -114,32 +241,45 @@ public class VideoConversionService extends Service<Void> {
                     continue;
                 }
                 
-                // Convert the video
-                boolean success = convertVideo(sourceFilePath, targetFilePath, resolution, format);
-                
-                // If conversion was successful, create a new Video object and notify listeners
-                if (success) {
-                    Video newVideo = new Video(baseName, resolution, format, targetFilePath);
-                    
-                    // Notify listeners about the new video on the JavaFX Application Thread
-                    Platform.runLater(() -> {
-                        if (onNewVideoCreated != null) {
-                            onNewVideoCreated.accept(newVideo);
-                        }
-                    });
-                }
+                // Add to conversion queue
+                conversionQueue.add(new ConversionJob(sourceFilePath, targetFilePath, resolution, format, baseName));
+                totalJobs.incrementAndGet();
             }
         }
     }
     
     /**
-     * Notify listeners that a new video has been created
-     * @param newVideo The new video that was created
+     * Process a single conversion job
+     * @param job The conversion job to process
      */
-    private void notifyNewVideoCreated(Video newVideo) {
-        if (onNewVideoCreated != null) {
-            Platform.runLater(() -> onNewVideoCreated.accept(newVideo));
+    private void processConversionJob(ConversionJob job) {
+        if (currentTask.isCancelled()) {
+            return;
         }
+        
+        boolean success = convertVideo(job.sourcePath, job.targetPath, job.resolution, job.format);
+        
+        // If conversion was successful, create a new Video object and notify listeners
+        if (success) {
+            Video newVideo = new Video(job.baseName, job.resolution, job.format, job.targetPath);
+            
+            // Notify listeners about the new video on the JavaFX Application Thread
+            Platform.runLater(() -> {
+                if (onNewVideoCreated != null) {
+                    onNewVideoCreated.accept(newVideo);
+                }
+            });
+        }
+        
+        // Update progress
+        int completed = completedJobs.incrementAndGet();
+        int total = totalJobs.get();
+        
+        Platform.runLater(() -> {
+            ((ConversionTask)currentTask).updateConversionProgress(completed, total);
+            double progressPercentage = (double) completed / total * 100;
+            log(String.format("Progress: %.1f%% (%d/%d)", progressPercentage, completed, total));
+        });
     }
     
     /**
@@ -151,6 +291,11 @@ public class VideoConversionService extends Service<Void> {
      * @return true if conversion was successful, false otherwise
      */
     private boolean convertVideo(String sourceFilePath, String targetFilePath, String targetResolution, String targetFormat) {
+        // Check if we've been cancelled
+        if (currentTask.isCancelled()) {
+            return false;
+        }
+        
         // Extract resolution values (e.g., "480p" -> 480)
         int resolutionValue = Integer.parseInt(targetResolution.replace("p", ""));
         
@@ -216,9 +361,16 @@ public class VideoConversionService extends Service<Void> {
             String line;
             StringBuilder output = new StringBuilder();
             
-            while ((line = reader.readLine()) != null) {
+            while (!currentTask.isCancelled() && (line = reader.readLine()) != null) {
                 output.append(line).append("\n");
                 LOGGER.fine(line);
+            }
+            
+            // If cancelled, kill the process
+            if (currentTask.isCancelled()) {
+                process.destroy();
+                log("Conversion was cancelled: " + new File(targetFilePath).getName());
+                return false;
             }
             
             int exitCode = process.waitFor();
@@ -235,8 +387,13 @@ public class VideoConversionService extends Service<Void> {
             }
             
         } catch (IOException | InterruptedException e) {
-            log("ERROR: Conversion failed: " + e.getMessage());
-            LOGGER.log(Level.SEVERE, "Conversion failed", e);
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                log("Conversion was interrupted: " + new File(targetFilePath).getName());
+            } else {
+                log("ERROR: Conversion failed: " + e.getMessage());
+                LOGGER.log(Level.SEVERE, "Conversion failed", e);
+            }
             return false;
         }
     }

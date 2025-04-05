@@ -5,6 +5,7 @@ import com.videostreaming.service.VideoConversionService;
 import com.videostreaming.service.VideoScanService;
 import com.videostreaming.ui.VideoListCell;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
@@ -12,6 +13,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TextArea;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
@@ -26,6 +28,9 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -42,8 +47,14 @@ public class MainApp extends Application {
     private ListView<Video> videoListView;
     private TextArea logTextArea;
     private Button rescanButton;
+    private Button cancelButton;
+    private ProgressBar progressBar;
+    private Label statusLabel;
     private VideoScanService videoScanService;
     private VideoConversionService videoConversionService;
+    
+    // Executor for UI updates
+    private final ScheduledExecutorService uiUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
 
     @Override
     public void start(Stage primaryStage) {
@@ -84,18 +95,31 @@ public class MainApp extends Application {
         logTextArea = new TextArea();
         logTextArea.setEditable(false);
         
-        // Create the button
+        // Create status components
+        statusLabel = new Label("Ready");
+        statusLabel.setStyle("-fx-font-style: italic;");
+        
+        progressBar = new ProgressBar(0);
+        progressBar.setPrefWidth(Double.MAX_VALUE);
+        progressBar.setVisible(false);
+        
+        // Create the buttons
         rescanButton = new Button("Rescan");
         rescanButton.setPrefWidth(120);
         rescanButton.setOnAction(event -> scanVideosDirectory());
         
+        cancelButton = new Button("Cancel");
+        cancelButton.setPrefWidth(120);
+        cancelButton.setDisable(true);
+        cancelButton.setOnAction(event -> cancelOperations());
+        
         HBox buttonBox = new HBox(10);
         buttonBox.setPadding(new Insets(10, 0, 0, 0));
-        buttonBox.getChildren().add(rescanButton);
+        buttonBox.getChildren().addAll(rescanButton, cancelButton);
 
         // Create the right panel with log and button
         VBox rightSection = new VBox(10);
-        rightSection.getChildren().addAll(logLabel, logTextArea, buttonBox);
+        rightSection.getChildren().addAll(logLabel, logTextArea, statusLabel, progressBar, buttonBox);
         VBox.setVgrow(logTextArea, Priority.ALWAYS);
         
         // Add log section to a panel container
@@ -133,6 +157,34 @@ public class MainApp extends Application {
         // Automatically scan videos directory on startup
         log("Application started");
         scanVideosDirectory();
+        
+        // Add shutdown hook for executor
+        primaryStage.setOnCloseRequest(event -> {
+            if (uiUpdateExecutor != null) {
+                uiUpdateExecutor.shutdown();
+            }
+        });
+    }
+    
+    /**
+     * Cancel ongoing operations
+     */
+    private void cancelOperations() {
+        if (videoScanService != null && videoScanService.isRunning()) {
+            videoScanService.cancel();
+            log("Video scanning canceled");
+        }
+        
+        if (videoConversionService != null && videoConversionService.isRunning()) {
+            videoConversionService.cancel();
+            log("Video conversion canceled");
+        }
+        
+        // Re-enable the rescan button
+        rescanButton.setDisable(false);
+        cancelButton.setDisable(true);
+        progressBar.setVisible(false);
+        statusLabel.setText("Ready");
     }
     
     /**
@@ -149,19 +201,56 @@ public class MainApp extends Application {
         // Bind the video list to the service's observable list
         videoListView.setItems(videoScanService.getVideoList());
         
+        // Bind progress and status updates
+        videoScanService.progressProperty().addListener((obs, oldVal, newVal) -> {
+            Platform.runLater(() -> {
+                progressBar.setProgress(newVal.doubleValue());
+            });
+        });
+        
+        // Add running state listeners
+        videoScanService.runningProperty().addListener((obs, wasRunning, isRunning) -> {
+            Platform.runLater(() -> {
+                if (isRunning) {
+                    statusLabel.setText("Scanning directory...");
+                    progressBar.setVisible(true);
+                    rescanButton.setDisable(true);
+                    cancelButton.setDisable(false);
+                } else if (!wasRunning) {
+                    // Only update if we were running before
+                    progressBar.setVisible(false);
+                    cancelButton.setDisable(true);
+                }
+            });
+        });
+        
         // Add failure handler
         videoScanService.setOnFailed(event -> {
             log("ERROR: Video scan failed - " + event.getSource().getException().getMessage());
             event.getSource().getException().printStackTrace();
-            rescanButton.setDisable(false);
+            
+            Platform.runLater(() -> {
+                rescanButton.setDisable(false);
+                cancelButton.setDisable(true);
+                progressBar.setVisible(false);
+                statusLabel.setText("Scan failed");
+            });
         });
         
         // Add success handler to check for necessary video conversions
         videoScanService.setOnSucceeded(event -> {
-            rescanButton.setDisable(false);
-            
             // Get the scanned videos
             List<Video> videos = videoScanService.getValue();
+            
+            Platform.runLater(() -> {
+                if (!videoConversionService.isRunning()) {
+                    // Only update UI if we're not immediately starting a conversion
+                    rescanButton.setDisable(false);
+                    cancelButton.setDisable(true);
+                    progressBar.setVisible(false);
+                    statusLabel.setText("Scan completed");
+                }
+            });
             
             if (videos.isEmpty()) {
                 log("No videos found in directory");
@@ -201,9 +290,20 @@ public class MainApp extends Application {
      * Start scanning videos directory in background thread
      */
     private void scanVideosDirectory() {
-        rescanButton.setDisable(true);
-        log("Starting video directory scan...");
+        if (videoScanService.isRunning()) {
+            log("Video scan already in progress");
+            return;
+        }
         
+        Platform.runLater(() -> {
+            rescanButton.setDisable(true);
+            cancelButton.setDisable(false);
+            progressBar.setVisible(true);
+            progressBar.setProgress(-1); // Indeterminate progress
+            statusLabel.setText("Starting scan...");
+        });
+        
+        log("Starting video directory scan...");
         videoScanService.restart();
     }
     
@@ -212,7 +312,13 @@ public class MainApp extends Application {
      * @param sourceVideos Source videos to convert (highest resolution of each video)
      */
     private void startConversion(List<Video> sourceVideos) {
-        rescanButton.setDisable(true);
+        Platform.runLater(() -> {
+            rescanButton.setDisable(true);
+            cancelButton.setDisable(false);
+            progressBar.setVisible(true);
+            statusLabel.setText("Starting video conversion...");
+        });
+        
         log("Starting automatic video conversion for " + sourceVideos.size() + " videos...");
         
         String videosPath = getVideosDirectoryPath();
@@ -220,6 +326,28 @@ public class MainApp extends Application {
         // Create a copy of the videos list to avoid concurrent modification
         List<Video> videosCopy = new ArrayList<>(sourceVideos);
         videoConversionService = new VideoConversionService(videosCopy, videosPath, this::log);
+        
+        // Bind progress updates
+        videoConversionService.progressProperty().addListener((obs, oldVal, newVal) -> {
+            Platform.runLater(() -> {
+                progressBar.setProgress(newVal.doubleValue());
+            });
+        });
+        
+        // Add running state change listener
+        videoConversionService.runningProperty().addListener((obs, wasRunning, isRunning) -> {
+            Platform.runLater(() -> {
+                if (isRunning) {
+                    rescanButton.setDisable(true);
+                    cancelButton.setDisable(false);
+                    progressBar.setVisible(true);
+                    statusLabel.setText("Converting videos...");
+                } else if (!wasRunning) {
+                    progressBar.setVisible(false);
+                    cancelButton.setDisable(true);
+                }
+            });
+        });
         
         // Set up callback for when new videos are created
         videoConversionService.setOnNewVideoCreated(video -> {
@@ -231,13 +359,25 @@ public class MainApp extends Application {
             log("Video conversion completed - refreshing video list");
             // After all conversions are done, do a full refresh of the video list
             videoScanService.refreshVideoList();
-            rescanButton.setDisable(false);
+            
+            Platform.runLater(() -> {
+                rescanButton.setDisable(false);
+                cancelButton.setDisable(true);
+                progressBar.setVisible(false);
+                statusLabel.setText("Conversion completed");
+            });
         });
         
         videoConversionService.setOnFailed(event -> {
             log("ERROR: Video conversion failed - " + event.getSource().getException().getMessage());
             event.getSource().getException().printStackTrace();
-            rescanButton.setDisable(false);
+            
+            Platform.runLater(() -> {
+                rescanButton.setDisable(false);
+                cancelButton.setDisable(true);
+                progressBar.setVisible(false);
+                statusLabel.setText("Conversion failed");
+            });
         });
         
         videoConversionService.start();
@@ -271,34 +411,31 @@ public class MainApp extends Application {
     }
     
     /**
-     * Show an alert dialog
-     * @param title Alert title
-     * @param message Alert message
-     */
-    private void showAlert(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
-    }
-    
-    /**
-     * Log a message to the log text area
+     * Log a message to the UI
      */
     private void log(String message) {
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        String timestamp = dateFormat.format(new Date());
-        logTextArea.appendText("\n[" + timestamp + "] " + message);
+        String timestamp = new SimpleDateFormat("HH:mm:ss").format(new Date());
+        String logMessage = timestamp + " " + message;
         
-        // Scroll to the bottom
-        logTextArea.positionCaret(logTextArea.getText().length());
+        LOGGER.info(message);
+        
+        // Update the UI on the JavaFX application thread
+        Platform.runLater(() -> {
+            logTextArea.appendText(logMessage + "\n");
+            // Auto-scroll to the bottom
+            logTextArea.setScrollTop(Double.MAX_VALUE);
+        });
     }
 
-    /**
-     * Main method that launches the application
-     */
     public static void main(String[] args) {
         launch(args);
+    }
+    
+    @Override
+    public void stop() {
+        // Shutdown the scheduled executor service
+        if (uiUpdateExecutor != null && !uiUpdateExecutor.isShutdown()) {
+            uiUpdateExecutor.shutdownNow();
+        }
     }
 } 

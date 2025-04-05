@@ -29,6 +29,7 @@ public class VideoScanService extends Service<List<Video>> {
     private final String videoDirectory;
     private final Consumer<String> logConsumer;
     private final ObservableList<Video> videoList = FXCollections.observableArrayList();
+    private final Map<String, Video> videoMap = new HashMap<>();
     
     // Pattern to match filenames like videoName-<resolution>.<format>
     private static final Pattern VIDEO_FILENAME_PATTERN = 
@@ -57,25 +58,22 @@ public class VideoScanService extends Service<List<Video>> {
         
         // Ensure UI updates happen on the JavaFX Application Thread
         Platform.runLater(() -> {
-            // Simply add the new video to the list
-            boolean alreadyExists = false;
+            String key = video.getName() + "-" + video.getResolution() + "." + video.getFormat();
             
-            // Check if an identical video already exists in the list
-            for (Video existingVideo : videoList) {
-                if (existingVideo.getName().equals(video.getName()) &&
-                    existingVideo.getFormat().equals(video.getFormat()) &&
-                    existingVideo.getResolution().equals(video.getResolution())) {
-                    alreadyExists = true;
-                    break;
-                }
-            }
-            
-            if (!alreadyExists) {
-                videoList.add(video);
-                log("Added new video: " + video.getName() + " (" + video.getResolution() + ", " + video.getFormat() + ")");
-            } else {
+            // Check if this exact video already exists
+            if (videoMap.containsKey(key)) {
                 log("Video already exists: " + video.getName() + " (" + video.getResolution() + ", " + video.getFormat() + ")");
+                return;
             }
+            
+            // Add to our collections
+            videoList.add(video);
+            videoMap.put(key, video);
+            
+            log("Added new video: " + video.getName() + " (" + video.getResolution() + ", " + video.getFormat() + ")");
+            
+            // Refresh to sort the list
+            refreshVideoList();
         });
     }
     
@@ -101,96 +99,144 @@ public class VideoScanService extends Service<List<Video>> {
     
     @Override
     protected Task<List<Video>> createTask() {
-        return new Task<>() {
-            @Override
-            protected List<Video> call() {
-                log("Starting video directory scan: " + videoDirectory);
+        return new ScanTask();
+    }
+    
+    /**
+     * Custom Task implementation with better progress tracking
+     */
+    private class ScanTask extends Task<List<Video>> {
+        @Override
+        protected List<Video> call() {
+            log("Starting video directory scan: " + videoDirectory);
+            
+            // Clear existing videos
+            Platform.runLater(() -> {
+                videoList.clear();
+                videoMap.clear();
+            });
+            
+            updateProgress(0, 100);
+            updateMessage("Checking directory");
+            
+            File directory = new File(videoDirectory);
+            if (!directory.exists()) {
+                log("Directory not found: " + videoDirectory);
+                directory.mkdirs();
+                log("Created directory: " + videoDirectory);
+                updateProgress(100, 100);
+                updateMessage("Scan complete - created empty directory");
+                return new ArrayList<>();
+            }
+            
+            if (!directory.isDirectory()) {
+                log("Not a directory: " + videoDirectory);
+                updateProgress(100, 100);
+                updateMessage("Scan failed - not a directory");
+                return new ArrayList<>();
+            }
+            
+            updateProgress(10, 100);
+            updateMessage("Reading directory contents");
+            
+            File[] files = directory.listFiles();
+            if (files == null) {
+                log("Unable to list files in directory: " + videoDirectory);
+                updateProgress(100, 100);
+                updateMessage("Scan failed - unable to list files");
+                return new ArrayList<>();
+            }
+            
+            log("Found " + files.length + " files in directory");
+            
+            List<Video> allVideos = new ArrayList<>();
+            int totalFiles = files.length;
+            int processedCount = 0;
+            
+            updateMessage("Processing " + totalFiles + " files");
+            
+            // Process each file
+            for (File file : files) {
+                if (isCancelled()) {
+                    log("Scan cancelled");
+                    return allVideos;
+                }
                 
-                // Clear existing videos
+                processedCount++;
+                double progress = 10 + ((double) processedCount / totalFiles * 90); // 10-100% range
+                updateProgress(progress, 100);
+                updateMessage("Processing file " + processedCount + " of " + totalFiles);
+                
+                if (!file.isFile()) {
+                    continue;
+                }
+                
+                String filename = file.getName();
+                Matcher matcher = VIDEO_FILENAME_PATTERN.matcher(filename);
+                
+                if (!matcher.matches()) {
+                    log("File doesn't match expected pattern: " + filename);
+                    continue;
+                }
+                
+                String baseName = matcher.group(1);
+                String resolution = matcher.group(2);
+                String format = matcher.group(3);
+                
+                // Check if format and resolution are supported
+                if (!VideoFormatUtil.isFormatSupported(format) || 
+                    !VideoFormatUtil.isResolutionSupported(resolution)) {
+                    log("Unsupported format or resolution: " + filename);
+                    continue;
+                }
+                
+                // Create a new video object
+                Video video = new Video(baseName, resolution, format, file.getAbsolutePath());
+                
+                // Add to our collections
+                allVideos.add(video);
+                
+                // Generate a unique key for this video
+                final String key = baseName + "-" + resolution + "." + format;
+                
+                // Update UI on the JavaFX thread
                 Platform.runLater(() -> {
-                    videoList.clear();
+                    videoList.add(video);
+                    videoMap.put(key, video);
                 });
                 
-                File directory = new File(videoDirectory);
-                if (!directory.exists()) {
-                    log("Directory not found: " + videoDirectory);
-                    directory.mkdirs();
-                    log("Created directory: " + videoDirectory);
-                    return new ArrayList<>();
-                }
-                
-                if (!directory.isDirectory()) {
-                    log("Not a directory: " + videoDirectory);
-                    return new ArrayList<>();
-                }
-                
-                File[] files = directory.listFiles();
-                if (files == null) {
-                    log("Unable to list files in directory: " + videoDirectory);
-                    return new ArrayList<>();
-                }
-                
-                log("Found " + files.length + " files in directory");
-                
-                List<Video> allVideos = new ArrayList<>();
-                
-                // Process each file
-                for (File file : files) {
-                    if (!file.isFile()) {
-                        continue;
-                    }
-                    
-                    String filename = file.getName();
-                    Matcher matcher = VIDEO_FILENAME_PATTERN.matcher(filename);
-                    
-                    if (!matcher.matches()) {
-                        log("File doesn't match expected pattern: " + filename);
-                        continue;
-                    }
-                    
-                    String baseName = matcher.group(1);
-                    String resolution = matcher.group(2);
-                    String format = matcher.group(3);
-                    
-                    // Check if format and resolution are supported
-                    if (!VideoFormatUtil.isFormatSupported(format) || 
-                        !VideoFormatUtil.isResolutionSupported(resolution)) {
-                        log("Unsupported format or resolution: " + filename);
-                        continue;
-                    }
-                    
-                    // Create a new video object
-                    Video video = new Video(baseName, resolution, format, file.getAbsolutePath());
-                    
-                    // Add to our collections
-                    allVideos.add(video);
-                    Platform.runLater(() -> videoList.add(video));
-                    
-                    log("Found video: " + filename);
-                }
-                
-                log("Video scan complete. Found " + allVideos.size() + " videos");
-                return allVideos;
+                log("Found video: " + filename);
             }
-        };
+            
+            updateProgress(100, 100);
+            updateMessage("Scan complete - found " + allVideos.size() + " videos");
+            log("Video scan complete. Found " + allVideos.size() + " videos");
+            return allVideos;
+        }
     }
     
     @Override
     protected void succeeded() {
         super.succeeded();
-        
-        // Sort the list by name, then by resolution (highest first)
-        Platform.runLater(() -> {
-            videoList.sort((v1, v2) -> {
-                int nameCompare = v1.getName().compareTo(v2.getName());
-                if (nameCompare != 0) {
-                    return nameCompare;
-                }
-                
-                // For same name, sort by resolution (highest first)
-                return -VideoFormatUtil.compareResolutions(v1.getResolution(), v2.getResolution());
-            });
-        });
+        refreshVideoList();
+    }
+    
+    @Override
+    protected void cancelled() {
+        super.cancelled();
+        log("Video scanning was cancelled");
+    }
+    
+    @Override
+    protected void failed() {
+        super.failed();
+        Throwable ex = getException();
+        if (ex != null) {
+            log("ERROR: Video scanning failed: " + ex.getMessage());
+            LOGGER.log(Level.SEVERE, "Video scanning failed", ex);
+        } else {
+            log("ERROR: Video scanning failed for unknown reason");
+        }
     }
     
     /**
