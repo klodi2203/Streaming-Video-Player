@@ -611,7 +611,12 @@ public class ClientApp extends Application {
         // Stop any active streaming
         StreamingUtil.stopStreaming();
         
-        // Clean up temporary files
-        StreamingUtil.cleanupTempFiles();
+        // Clean up temporary files - wrapped in try-catch to prevent application crash on exit
+        try {
+            StreamingUtil.cleanupTempFiles();
+        } catch (Exception e) {
+            // Log the error but don't re-throw to allow application to exit cleanly
+            LOGGER.log(Level.WARNING, "Error during cleanup: " + e.getMessage(), e);
+        }
     }
 } 

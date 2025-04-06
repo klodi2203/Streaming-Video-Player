@@ -369,13 +369,25 @@ public class StreamingUtil {
     public static void cleanupTempFiles() {
         LoggingUtil.info(LOGGER, "CLEANUP", "Cleaning up temporary streaming files in: " + TEMP_DIR);
         try {
-            Files.walk(Paths.get(TEMP_DIR))
+            // Only look at the direct files in the temp directory, don't try to walk into subdirectories
+            // to avoid permission issues with system directories
+            Files.list(Paths.get(TEMP_DIR))
                 .filter(path -> {
-                    String filename = path.getFileName().toString();
-                    return Files.isRegularFile(path) && 
-                           (filename.endsWith(".mp4") || 
-                            filename.endsWith(".avi") || 
-                            filename.endsWith(".mkv"));
+                    try {
+                        if (!Files.isRegularFile(path)) {
+                            return false;
+                        }
+                        
+                        String filename = path.getFileName().toString();
+                        // Only target video files that might have been created by our application
+                        return filename.contains("_") && 
+                               (filename.endsWith(".mp4") || 
+                                filename.endsWith(".avi") || 
+                                filename.endsWith(".mkv"));
+                    } catch (Exception e) {
+                        // Skip any files we don't have permission to access
+                        return false;
+                    }
                 })
                 .forEach(path -> {
                     try {
