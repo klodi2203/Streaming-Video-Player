@@ -8,8 +8,6 @@ import com.videostreaming.client.util.SpeedTestUtil;
 import com.videostreaming.client.util.StreamingUtil;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.beans.property.SimpleStringProperty;
-import javafx.beans.property.StringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Service;
@@ -53,13 +51,29 @@ public class ClientApp extends Application {
     private Label networkStatusLabel;
     
     // Properties
-    private StringProperty currentStatus = new SimpleStringProperty();
     private Task<Double> speedTestTask;
     private double downloadSpeed = 0.0;
     private Service<List<Video>> videoRequestService;
     private boolean speedTestCompleted = false;
 
     public static void main(String[] args) {
+        // Add a JVM shutdown hook to perform cleanup if the application is terminated unexpectedly
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                Logger logger = Logger.getLogger(ClientApp.class.getName());
+                logger.info("Shutdown hook triggered, cleaning up resources...");
+                
+                // Perform cleanup
+                StreamingUtil.stopStreaming();
+                com.videostreaming.client.dialog.VideoPlayerWindow.cleanupAll();
+                StreamingUtil.cleanupTempFiles();
+                
+                logger.info("Cleanup completed in shutdown hook");
+            } catch (Exception e) {
+                System.err.println("Error during shutdown cleanup: " + e.getMessage());
+            }
+        }));
+        
         launch(args);
     }
 
@@ -557,30 +571,6 @@ public class ClientApp extends Application {
      * Show a notification dialog that the stream has started
      * In a real application, this would launch the video player
      */
-    private void showStreamingNotification(Video video, StreamingProtocol protocol) {
-        Platform.runLater(() -> {
-            Alert alert = new Alert(Alert.AlertType.INFORMATION);
-            alert.setTitle("Streaming Started");
-            alert.setHeaderText("Video Streaming Started");
-            
-            VBox content = new VBox(10);
-            content.setPadding(new Insets(10));
-            
-            Label videoLabel = new Label("Video: " + video.getName());
-            Label resolutionLabel = new Label("Resolution: " + video.getResolution());
-            Label formatLabel = new Label("Format: " + video.getFormat());
-            Label protocolLabel = new Label("Protocol: " + protocol);
-            
-            content.getChildren().addAll(
-                    videoLabel, resolutionLabel, formatLabel, protocolLabel,
-                    new Separator(),
-                    new Label("The video will be played using your system's default video player.")
-            );
-            
-            alert.getDialogPane().setContent(content);
-            alert.showAndWait();
-        });
-    }
     
     /**
      * Adds a message to the log area
@@ -610,6 +600,14 @@ public class ClientApp extends Application {
         
         // Stop any active streaming
         StreamingUtil.stopStreaming();
+        
+        // Make sure VLC resources are explicitly cleaned up
+        try {
+            LOGGER.info("Performing VLC resource cleanup");
+            com.videostreaming.client.dialog.VideoPlayerWindow.cleanupAll();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Error during VLC cleanup: " + e.getMessage(), e);
+        }
         
         // Clean up temporary files - wrapped in try-catch to prevent application crash on exit
         try {

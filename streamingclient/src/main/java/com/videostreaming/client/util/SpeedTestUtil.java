@@ -2,7 +2,6 @@ package com.videostreaming.client.util;
 
 import javafx.concurrent.Task;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;

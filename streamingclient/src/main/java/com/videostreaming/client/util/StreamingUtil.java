@@ -1,6 +1,7 @@
 package com.videostreaming.client.util;
 
 import com.videostreaming.client.dialog.ProtocolSelectionDialog.StreamingProtocol;
+import com.videostreaming.client.dialog.VideoPlayerWindow;
 import com.videostreaming.client.model.Video;
 
 import java.io.BufferedReader;
@@ -8,7 +9,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
@@ -46,6 +46,118 @@ public class StreamingUtil {
     private static Process ffmpegProcess;
     private static Process playerProcess;
     private static final AtomicBoolean isStreaming = new AtomicBoolean(false);
+    
+    /**
+     * Play the video using our custom video player
+     * 
+     * @param videoPath Path to the video file
+     * @param outputCallback Callback for output messages
+     * @throws IOException If an error occurs starting the player
+     */
+    private static VideoPlayerWindow activePlayerWindow = null;
+    
+    private static void playVideo(String videoPath, Consumer<String> outputCallback) throws IOException {
+        File videoFile = new File(videoPath);
+        if (!videoFile.exists()) {
+            String errorMsg = "Video file does not exist: " + videoPath;
+            LoggingUtil.error(LOGGER, "PLAYER", errorMsg);
+            throw new IOException(errorMsg);
+        }
+        
+        // Make sure the file has some content before trying to play it
+        if (videoFile.length() < 1000) {
+            LoggingUtil.logWithUi(LOGGER, Level.WARNING, "PLAYER", 
+                    "Video file is too small to play: " + videoFile.length() + " bytes", outputCallback);
+            return;
+        }
+        
+        // Check if VLC is available
+        boolean vlcAvailable = VideoPlayerWindow.isVlcAvailable();
+        
+        // If VLC is not available, try the external player
+        if (!vlcAvailable) {
+            LoggingUtil.logWithUi(LOGGER, Level.WARNING, "PLAYER",
+                    "VLC is not available on this system. Using external player instead.", outputCallback);
+            playVideoExternally(videoPath, outputCallback);
+            return;
+        }
+        
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                "Starting in-app video player for: " + videoPath, outputCallback);
+        
+        try {
+            // Close any existing player window
+            if (activePlayerWindow != null) {
+                activePlayerWindow.close();
+                activePlayerWindow = null;
+            }
+            
+            // Create a title from the filename
+            String fileName = videoFile.getName();
+            String title = "Video Player - " + fileName;
+            
+            // Create and show the player window
+            activePlayerWindow = VideoPlayerWindow.show(videoPath, title, outputCallback);
+            
+        } catch (Exception e) {
+            LoggingUtil.logWithUi(LOGGER, Level.WARNING, "PLAYER",
+                    "Failed to create in-app player: " + e.getMessage() + ". Falling back to external player.", outputCallback);
+            playVideoExternally(videoPath, outputCallback);
+        }
+    }
+    
+    /**
+     * Play video using the system's default video player as fallback
+     */
+    private static void playVideoExternally(String videoPath, Consumer<String> outputCallback) throws IOException {
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                "Starting external video player for: " + videoPath, outputCallback);
+        
+        List<String> command = new ArrayList<>();
+        
+        // Use the appropriate command based on OS
+        String os = System.getProperty("os.name").toLowerCase();
+        LoggingUtil.info(LOGGER, "SYSTEM", "Detected OS: " + os);
+        
+        if (os.contains("win")) {
+            // Windows
+            command.add("cmd");
+            command.add("/c");
+            command.add("start");
+            command.add("\"Video Player\"");
+            command.add(videoPath);
+        } else if (os.contains("mac")) {
+            // macOS
+            command.add("open");
+            command.add(videoPath);
+        } else {
+            // Linux and others - use xdg-open
+            command.add("xdg-open");
+            command.add(videoPath);
+        }
+        
+        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                "Player command: " + String.join(" ", command), outputCallback);
+        
+        // Start the player process
+        ProcessBuilder processBuilder = new ProcessBuilder(command);
+        playerProcess = processBuilder.start();
+        LoggingUtil.info(LOGGER, "PLAYER", "External player process started with PID: " + playerProcess.pid());
+        
+        // Log when the player process completes
+        new Thread(() -> {
+            try {
+                int exitCode = playerProcess.waitFor();
+                LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
+                        "External video player exited with code: " + exitCode, outputCallback);
+                playerProcess = null;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LoggingUtil.error(LOGGER, "THREAD", "Player process interrupted: " + e.getMessage());
+                outputCallback.accept("[PLAYER] Process interrupted");
+            }
+        }).start();
+    }
     
     /**
      * Start streaming a video using the selected protocol
@@ -244,77 +356,6 @@ public class StreamingUtil {
     }
     
     /**
-     * Play the video using the system's default player
-     * 
-     * @param videoPath Path to the video file
-     * @param outputCallback Callback for output messages
-     * @throws IOException If an error occurs starting the player
-     */
-    private static void playVideo(String videoPath, Consumer<String> outputCallback) throws IOException {
-        File videoFile = new File(videoPath);
-        if (!videoFile.exists()) {
-            String errorMsg = "Video file does not exist: " + videoPath;
-            LoggingUtil.error(LOGGER, "PLAYER", errorMsg);
-            throw new IOException(errorMsg);
-        }
-        
-        // Make sure the file has some content before trying to play it
-        if (videoFile.length() < 1000) {
-            LoggingUtil.logWithUi(LOGGER, Level.WARNING, "PLAYER", 
-                    "Video file is too small to play: " + videoFile.length() + " bytes", outputCallback);
-            return;
-        }
-        
-        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
-                "Starting system video player for: " + videoPath, outputCallback);
-        
-        List<String> command = new ArrayList<>();
-        
-        // Use the appropriate command based on OS
-        String os = System.getProperty("os.name").toLowerCase();
-        LoggingUtil.info(LOGGER, "SYSTEM", "Detected OS: " + os);
-        
-        if (os.contains("win")) {
-            // Windows
-            command.add("cmd");
-            command.add("/c");
-            command.add("start");
-            command.add("\"Video Player\"");
-            command.add(videoPath);
-        } else if (os.contains("mac")) {
-            // macOS
-            command.add("open");
-            command.add(videoPath);
-        } else {
-            // Linux and others - use xdg-open
-            command.add("xdg-open");
-            command.add(videoPath);
-        }
-        
-        LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
-                "Player command: " + String.join(" ", command), outputCallback);
-        
-        // Start the player process
-        ProcessBuilder processBuilder = new ProcessBuilder(command);
-        playerProcess = processBuilder.start();
-        LoggingUtil.info(LOGGER, "PLAYER", "Player process started with PID: " + playerProcess.pid());
-        
-        // Log when the player process completes
-        new Thread(() -> {
-            try {
-                int exitCode = playerProcess.waitFor();
-                LoggingUtil.logWithUi(LOGGER, Level.INFO, "PLAYER", 
-                        "Video player exited with code: " + exitCode, outputCallback);
-                playerProcess = null;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                LoggingUtil.error(LOGGER, "THREAD", "Player process interrupted: " + e.getMessage());
-                outputCallback.accept("[PLAYER] Process interrupted");
-            }
-        }).start();
-    }
-    
-    /**
      * Stop the current streaming session
      */
     public static void stopStreaming() {
@@ -326,8 +367,12 @@ public class StreamingUtil {
             ffmpegProcess = null;
         }
         
+        // Close any active player window using the safe cleanup method
+        VideoPlayerWindow.cleanupAll();
+        activePlayerWindow = null;
+        
         if (playerProcess != null) {
-            LoggingUtil.info(LOGGER, "PLAYER", "Stopping video player process");
+            LoggingUtil.info(LOGGER, "PLAYER", "Stopping external video player process");
             playerProcess.destroy();
             playerProcess = null;
         }
