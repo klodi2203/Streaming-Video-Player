@@ -64,6 +64,9 @@ public class StreamingServer {
     // Keep track of active client handlers
     private final Map<InetAddress, ClientHandler> activeClients = new ConcurrentHashMap<>();
     
+    // Keep track of registered clients by their client IDs
+    private final Map<String, InetAddress> registeredClientIds = new ConcurrentHashMap<>();
+    
     /**
      * Create a new streaming server
      */
@@ -798,5 +801,66 @@ public class StreamingServer {
         public void disconnect() {
             isActive.set(false);
         }
+    }
+    
+    /**
+     * Register a new client with the streaming server
+     * @param clientAddress The client's IP address
+     * @param hostname The client's hostname
+     * @return A unique client ID
+     */
+    public String registerClient(InetAddress clientAddress, String hostname) {
+        // Generate a unique client ID
+        String clientId = "client-" + System.currentTimeMillis() + "-" + 
+                Math.abs(clientAddress.hashCode() % 1000);
+        
+        // Register the client by storing their IP address
+        registeredClientIds.put(clientId, clientAddress);
+        
+        // Increment client count
+        totalClientCount.incrementAndGet();
+        clientsConnected.incrementAndGet();
+        
+        logWithTimestamp("NEW CLIENT REGISTERED - " + clientId + " from " + clientAddress + 
+                " (" + hostname + ") - Active clients: " + clientsConnected.get());
+        
+        return clientId;
+    }
+    
+    /**
+     * Unregister a client from the streaming server
+     * @param clientId The client ID to unregister
+     * @param clientAddress The client's IP address for verification
+     */
+    public void unregisterClient(String clientId, InetAddress clientAddress) {
+        // Check if this client ID exists
+        InetAddress registeredAddress = registeredClientIds.get(clientId);
+        if (registeredAddress == null) {
+            logWithTimestamp("WARNING: Attempted to unregister unknown client ID: " + clientId);
+            return;
+        }
+        
+        // Verify the client address matches for security
+        if (!registeredAddress.equals(clientAddress)) {
+            logWithTimestamp("WARNING: Client address mismatch during unregistration. Expected " + 
+                    registeredAddress + " but received " + clientAddress);
+            return;
+        }
+        
+        // Remove the client ID
+        registeredClientIds.remove(clientId);
+        
+        // Decrement client count
+        clientsConnected.decrementAndGet();
+        
+        // Check if this client has any active streams and terminate them
+        ClientHandler handler = activeClients.get(clientAddress);
+        if (handler != null) {
+            logWithTimestamp("Terminating active streams for disconnecting client: " + clientId);
+            handler.disconnect();
+        }
+        
+        logWithTimestamp("CLIENT UNREGISTERED - " + clientId + " from " + clientAddress + 
+                " - Active clients: " + clientsConnected.get());
     }
 } 

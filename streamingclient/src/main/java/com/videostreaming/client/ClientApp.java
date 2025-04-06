@@ -6,6 +6,7 @@ import com.videostreaming.client.model.Video;
 import com.videostreaming.client.service.NetworkService;
 import com.videostreaming.client.util.SpeedTestUtil;
 import com.videostreaming.client.util.StreamingUtil;
+import com.videostreaming.client.dialog.VideoPlayerWindow;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -55,6 +56,11 @@ public class ClientApp extends Application {
     private double downloadSpeed = 0.0;
     private Service<List<Video>> videoRequestService;
     private boolean speedTestCompleted = false;
+    private Button connectButton;
+    private Button disconnectButton;
+    private Label connectionStatusLabel;
+    private Service<Boolean> connectionService;
+    private Service<Boolean> disconnectionService;
 
     public static void main(String[] args) {
         // Add a JVM shutdown hook to perform cleanup if the application is terminated unexpectedly
@@ -147,6 +153,44 @@ public class ClientApp extends Application {
         rightPanel.setPrefWidth(350);
         rightPanel.setMaxHeight(Double.MAX_VALUE);
         
+        // Add connection section
+        VBox connectionSection = new VBox(5);
+        connectionSection.getStyleClass().add("panel");
+        connectionSection.setPadding(new Insets(10));
+        
+        Label connectionLabel = new Label("Server Connection");
+        connectionLabel.getStyleClass().add("section-label");
+        
+        // Connection status display
+        HBox connectionStatusBox = new HBox(10);
+        connectionStatusBox.setAlignment(Pos.CENTER_LEFT);
+        
+        ProgressIndicator connectionIndicator = new ProgressIndicator(-1);
+        connectionIndicator.setPrefSize(24, 24);
+        connectionIndicator.setVisible(false);
+        
+        connectionStatusLabel = new Label("Disconnected");
+        connectionStatusLabel.setTextFill(Color.RED);
+        
+        connectionStatusBox.getChildren().addAll(connectionIndicator, connectionStatusLabel);
+        
+        // Connection buttons
+        HBox connectionButtonsBox = new HBox(10);
+        connectionButtonsBox.setAlignment(Pos.CENTER_RIGHT);
+        
+        connectButton = new Button("Connect");
+        connectButton.setPrefWidth(100);
+        connectButton.setOnAction(event -> handleConnectButtonClick(connectionIndicator));
+        
+        disconnectButton = new Button("Disconnect");
+        disconnectButton.setPrefWidth(100);
+        disconnectButton.setDisable(true);
+        disconnectButton.setOnAction(event -> handleDisconnectButtonClick(connectionIndicator));
+        
+        connectionButtonsBox.getChildren().addAll(connectButton, disconnectButton);
+        
+        connectionSection.getChildren().addAll(connectionLabel, connectionStatusBox, connectionButtonsBox);
+        
         // Speed test section
         VBox speedTestSection = new VBox(5);
         speedTestSection.getStyleClass().add("panel");
@@ -236,6 +280,7 @@ public class ClientApp extends Application {
         VBox.setVgrow(logArea, Priority.ALWAYS);
         
         // Add all sections to right panel
+        rightPanel.getChildren().add(0, connectionSection); // Add at the top
         rightPanel.getChildren().addAll(speedTestSection, formatSection, logSection);
         VBox.setVgrow(logSection, Priority.ALWAYS);
         
@@ -251,124 +296,95 @@ public class ClientApp extends Application {
         scene.getStylesheets().add(getClass().getResource("/styles.css").toExternalForm());
         
         primaryStage.setScene(scene);
-        primaryStage.setMinWidth(800);
-        primaryStage.setMinHeight(500);
+        primaryStage.setTitle("Streaming Client");
         primaryStage.show();
         
-        // Add initial log message
-        log("Streaming client initialized");
+        // Set initial state
+        formatComboBox.setDisable(true);
+        startStreamingButton.setDisable(true);
+        stopStreamingButton.setDisable(true);
+        speedTestIndicator.setProgress(0);
         
-        // Check if FFMPEG is available
-        checkFFmpegAvailability();
+        // Log startup
+        log("Application started");
+        log("Ready to connect to streaming server");
         
-        // Set up event handler for the format combo box
-        formatComboBox.setOnAction(event -> {
-            if (speedTestCompleted) {
-                String selectedFormat = formatComboBox.getValue();
-                log("Format selected: " + selectedFormat);
-                log("Requesting videos with format: " + selectedFormat + " and speed: " + String.format("%.2f", downloadSpeed) + " Mbps");
-                requestVideosFromServer(selectedFormat);
-            }
-        });
-        
-        // Start the speed test after a short delay to let the UI render
-        Platform.runLater(() -> {
-            startSpeedTest();
-        });
+        // NOTE: Removed automatic speed test initiation - now this will only happen 
+        // after the user clicks the Connect button
     }
     
     /**
      * Start a download speed test and update the UI with the results
      */
     private void startSpeedTest() {
-        log("Starting download speed test...");
-        speedTestStatusLabel.setText("Testing download speed (5 seconds)...");
+        // Reset state
+        speedTestCompleted = false;
+        downloadSpeed = 0.0;
         
-        // Create and configure the speed test task
+        // Create a new speed test task
         speedTestTask = SpeedTestUtil.createSpeedTestTask();
         
-        // Bind the progress indicator to the task progress
-        speedTestIndicator.progressProperty().bind(speedTestTask.progressProperty());
-        
-        // Update the speed value label with the current speed
-        speedTestTask.messageProperty().addListener((obs, oldVal, newVal) -> {
-            if (newVal != null) {
-                speedValueLabel.setText(newVal);
-            }
+        speedTestTask.setOnRunning(event -> {
+            speedTestStatusLabel.setText("Testing download speed...");
+            speedTestIndicator.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
+            log("Starting download speed test...");
         });
         
-        // Handle task completion
         speedTestTask.setOnSucceeded(event -> {
-            double finalSpeed = speedTestTask.getValue();
-            downloadSpeed = finalSpeed; // Store for later use
-            speedTestCompleted = true;
-            String formattedSpeed = String.format("%.2f Mbps", finalSpeed);
+            // Get the measured download speed
+            downloadSpeed = speedTestTask.getValue();
             
-            // Update UI
-            speedValueLabel.setText(formattedSpeed);
-            speedTestIndicator.progressProperty().unbind();
+            // Update the UI
             speedTestIndicator.setProgress(1.0);
-            speedTestStatusLabel.setText("Speed test completed!");
+            speedValueLabel.setText(String.format("%.2f Mbps", downloadSpeed));
             
-            // Enable format selection
-            formatComboBox.setDisable(false);
-            networkStatusLabel.setText("Select a format to request videos");
-            
-            log("Speed test completed: " + formattedSpeed);
-            
-            // Add speed rating based on the result
-            String speedRating;
-            if (finalSpeed < 5) {
-                speedRating = "Low speed - may experience buffering with high resolution videos";
+            if (downloadSpeed < 1.0) {
+                speedTestStatusLabel.setText("Low speed - limited to low resolution videos");
                 speedTestStatusLabel.setTextFill(Color.RED);
-            } else if (finalSpeed < 20) {
-                speedRating = "Medium speed - suitable for standard definition streaming";
+                log("Speed test completed: " + String.format("%.2f", downloadSpeed) + " Mbps (Low)");
+            } else if (downloadSpeed < 5.0) {
+                speedTestStatusLabel.setText("Medium speed - up to 480p video");
                 speedTestStatusLabel.setTextFill(Color.ORANGE);
+                log("Speed test completed: " + String.format("%.2f", downloadSpeed) + " Mbps (Medium)");
+            } else if (downloadSpeed < 10.0) {
+                speedTestStatusLabel.setText("Good speed - up to 720p video");
+                speedTestStatusLabel.setTextFill(Color.BLACK);
+                log("Speed test completed: " + String.format("%.2f", downloadSpeed) + " Mbps (Good)");
             } else {
-                speedRating = "Good speed - suitable for HD streaming";
+                speedTestStatusLabel.setText("Excellent speed - all resolutions available");
                 speedTestStatusLabel.setTextFill(Color.GREEN);
+                log("Speed test completed: " + String.format("%.2f", downloadSpeed) + " Mbps (Excellent)");
             }
             
-            log(speedRating);
-            log("Please select a video format to continue.");
-            
-            // Automatically request videos with the default format
-            String selectedFormat = formatComboBox.getValue();
-            log("Automatically requesting videos with format: " + selectedFormat);
-            requestVideosFromServer(selectedFormat);
-        });
-        
-        // Handle task failure
-        speedTestTask.setOnFailed(event -> {
-            Throwable ex = speedTestTask.getException();
-            log("Speed test failed: " + (ex != null ? ex.getMessage() : "Unknown error"));
-            
-            // Update UI
-            speedValueLabel.setText("Test failed");
-            speedTestIndicator.progressProperty().unbind();
-            speedTestIndicator.setProgress(0);
-            speedTestStatusLabel.setText("Speed test failed. Using default settings.");
-            speedTestStatusLabel.setTextFill(Color.RED);
-            
-            // Enable format selection anyway to allow user to continue
+            // Enable the format selection
             formatComboBox.setDisable(false);
             speedTestCompleted = true;
-            downloadSpeed = 10.0; // Default speed if test fails
-            networkStatusLabel.setText("Select a format to request videos");
             
-            log("Using default speed value of 10.0 Mbps");
-            log("Please select a video format to continue.");
-            
-            // Automatically request videos with the default format
-            String selectedFormat = formatComboBox.getValue();
-            log("Automatically requesting videos with format: " + selectedFormat);
-            requestVideosFromServer(selectedFormat);
+            // Automatically request videos with MP4 format initially
+            log("Automatically requesting videos with format: mp4");
+            requestVideosFromServer("mp4");
         });
         
-        // Start the task
-        Thread speedTestThread = new Thread(speedTestTask);
-        speedTestThread.setDaemon(true);
-        speedTestThread.start();
+        speedTestTask.setOnFailed(event -> {
+            Throwable exception = event.getSource().getException();
+            log("Speed test failed: " + exception.getMessage());
+            speedTestStatusLabel.setText("Speed test failed");
+            speedTestStatusLabel.setTextFill(Color.RED);
+            speedTestIndicator.setProgress(0);
+            
+            // Enable the format selection anyway with a default speed
+            formatComboBox.setDisable(false);
+            downloadSpeed = 5.0; // Assume a medium speed
+            speedTestCompleted = true;
+            
+            // Automatically request videos with MP4 format initially
+            log("Using default speed (5.0 Mbps) due to test failure");
+            log("Automatically requesting videos with format: mp4");
+            requestVideosFromServer("mp4");
+        });
+        
+        // Start the speed test
+        new Thread(speedTestTask).start();
     }
     
     /**
@@ -470,6 +486,18 @@ public class ClientApp extends Application {
      * This will show the protocol selection dialog and start streaming
      */
     private void handleStartStreamingButtonClick() {
+        // Check if connected first
+        if (!NetworkService.isConnected()) {
+            log("ERROR: Not connected to server. Please connect first.");
+            // Show an alert
+            Alert alert = new Alert(Alert.AlertType.ERROR, 
+                    "You need to connect to the server before streaming.",
+                    ButtonType.OK);
+            alert.setHeaderText("Connection Required");
+            alert.showAndWait();
+            return;
+        }
+        
         Video selectedVideo = videoListView.getSelectionModel().getSelectedItem();
         if (selectedVideo == null) {
             log("No video selected");
@@ -568,6 +596,122 @@ public class ClientApp extends Application {
     }
     
     /**
+     * Handle connect button click
+     */
+    private void handleConnectButtonClick(ProgressIndicator indicator) {
+        // Check if already connected
+        if (NetworkService.isConnected()) {
+            log("Already connected to server with client ID: " + NetworkService.getClientId());
+            return;
+        }
+        
+        connectButton.setDisable(true);
+        indicator.setVisible(true);
+        connectionStatusLabel.setText("Connecting...");
+        
+        // Create a new connection service
+        connectionService = NetworkService.createConnectionService();
+        
+        connectionService.setOnSucceeded(event -> {
+            Boolean result = connectionService.getValue();
+            if (result != null && result) {
+                connectionStatusLabel.setText("Connected (ID: " + NetworkService.getClientId() + ")");
+                connectionStatusLabel.setTextFill(Color.GREEN);
+                disconnectButton.setDisable(false);
+                log("Successfully connected to server as client: " + NetworkService.getClientId());
+                
+                // Check if FFMPEG is available (moved from start method)
+                checkFFmpegAvailability();
+                
+                // Set up event handler for the format combo box (moved from start method)
+                formatComboBox.setOnAction(e -> {
+                    if (speedTestCompleted) {
+                        String selectedFormat = formatComboBox.getValue();
+                        log("Format selected: " + selectedFormat);
+                        log("Requesting videos with format: " + selectedFormat + " and speed: " + String.format("%.2f", downloadSpeed) + " Mbps");
+                        requestVideosFromServer(selectedFormat);
+                    }
+                });
+                
+                // After connection, automatically start speed test
+                startSpeedTest();
+            } else {
+                connectionStatusLabel.setText("Connection failed");
+                connectionStatusLabel.setTextFill(Color.RED);
+                connectButton.setDisable(false);
+                log("Failed to connect to server");
+            }
+            indicator.setVisible(false);
+        });
+        
+        connectionService.setOnFailed(event -> {
+            connectionStatusLabel.setText("Connection error");
+            connectionStatusLabel.setTextFill(Color.RED);
+            connectButton.setDisable(false);
+            indicator.setVisible(false);
+            log("Error connecting to server: " + connectionService.getException().getMessage());
+        });
+        
+        // Start the connection service
+        connectionService.start();
+    }
+    
+    /**
+     * Handle disconnect button click
+     */
+    private void handleDisconnectButtonClick(ProgressIndicator indicator) {
+        disconnectButton.setDisable(true);
+        indicator.setVisible(true);
+        connectionStatusLabel.setText("Disconnecting...");
+        
+        // First, stop any active streaming
+        if (StreamingUtil.isStreaming()) {
+            handleStopStreamingButtonClick();
+        }
+        
+        // Create a new disconnection service
+        disconnectionService = NetworkService.createDisconnectionService();
+        
+        disconnectionService.setOnSucceeded(event -> {
+            connectionStatusLabel.setText("Disconnected");
+            connectionStatusLabel.setTextFill(Color.RED);
+            connectButton.setDisable(false);
+            indicator.setVisible(false);
+            log("Disconnected from server");
+            
+            // Reset client state
+            speedTestCompleted = false;
+            downloadSpeed = 0.0;
+            speedValueLabel.setText("0.00 Mbps");
+            speedTestIndicator.setProgress(0);
+            speedTestStatusLabel.setText("Speed test needed");
+            
+            // Clear video list and disable UI elements
+            videoItems.clear();
+            formatComboBox.setValue("mp4");
+            formatComboBox.setDisable(true);
+            startStreamingButton.setDisable(true);
+            stopStreamingButton.setDisable(true);
+            networkStatusLabel.setText("Ready to request videos");
+            networkProgressIndicator.setVisible(false);
+            
+            // Remove the formatComboBox event handler
+            formatComboBox.setOnAction(null);
+        });
+        
+        disconnectionService.setOnFailed(event -> {
+            connectionStatusLabel.setText("Disconnection error");
+            connectionStatusLabel.setTextFill(Color.ORANGE);
+            disconnectButton.setDisable(false);
+            indicator.setVisible(false);
+            log("Error disconnecting from server: " + disconnectionService.getException().getMessage());
+        });
+        
+        // Start the disconnection service
+        disconnectionService.start();
+    }
+    
+    /**
      * Show a notification dialog that the stream has started
      * In a real application, this would launch the video player
      */
@@ -587,34 +731,22 @@ public class ClientApp extends Application {
     
     @Override
     public void stop() throws Exception {
-        super.stop();
-        
-        // Cancel any running tasks when the application is closed
-        if (speedTestTask != null && speedTestTask.isRunning()) {
-            speedTestTask.cancel();
-        }
-        
-        if (videoRequestService != null && videoRequestService.isRunning()) {
-            videoRequestService.cancel();
+        // Disconnect from server if connected
+        if (NetworkService.isConnected()) {
+            log("Disconnecting from server before shutdown...");
+            NetworkService.createDisconnectionService().start();
         }
         
         // Stop any active streaming
         StreamingUtil.stopStreaming();
         
-        // Make sure VLC resources are explicitly cleaned up
-        try {
-            LOGGER.info("Performing VLC resource cleanup");
-            com.videostreaming.client.dialog.VideoPlayerWindow.cleanupAll();
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "Error during VLC cleanup: " + e.getMessage(), e);
-        }
+        // Clean up any temporary files
+        StreamingUtil.cleanupTempFiles();
         
-        // Clean up temporary files - wrapped in try-catch to prevent application crash on exit
-        try {
-            StreamingUtil.cleanupTempFiles();
-        } catch (Exception e) {
-            // Log the error but don't re-throw to allow application to exit cleanly
-            LOGGER.log(Level.WARNING, "Error during cleanup: " + e.getMessage(), e);
-        }
+        // Release resources
+        VideoPlayerWindow.cleanupAll();
+        
+        log("Application shutting down");
+        super.stop();
     }
 } 

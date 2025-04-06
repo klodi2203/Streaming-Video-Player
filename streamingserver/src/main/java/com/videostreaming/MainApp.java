@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -56,6 +57,7 @@ public class MainApp extends Application {
     private Label activeClientsLabel;
     private Label activeStreamsLabel;
     private Label totalClientsLabel;
+    private Label serverStatusLabel;
     private ScheduledExecutorService statusUpdateExecutor;
     
     // Executor for UI updates
@@ -474,16 +476,47 @@ public class MainApp extends Application {
      * Start periodic server status updates
      */
     private void startStatusUpdates() {
+        // Create a scheduled executor to update the status labels
         statusUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
-        statusUpdateExecutor.scheduleAtFixedRate(() -> {
-            if (apiServer != null) {
-                Platform.runLater(() -> {
-                    activeClientsLabel.setText("Active Clients: " + apiServer.getStreamingServer().getActiveClientsCount());
-                    activeStreamsLabel.setText("Active Streams: " + apiServer.getStreamingServer().getActiveStreamsCount());
-                    totalClientsLabel.setText("Total Clients: " + apiServer.getStreamingServer().getTotalClientCount());
-                });
-            }
-        }, 0, 2, java.util.concurrent.TimeUnit.SECONDS);
+        
+        statusUpdateExecutor.scheduleWithFixedDelay(() -> {
+            Platform.runLater(() -> {
+                try {
+                    // Update server status information
+                    com.videostreaming.api.StreamingServer streamingServer = apiServer.getStreamingServer();
+                    activeClientsLabel.setText("Active Clients: " + streamingServer.getActiveClientsCount());
+                    activeStreamsLabel.setText("Active Streams: " + streamingServer.getActiveStreamsCount());
+                    totalClientsLabel.setText("Total Clients: " + streamingServer.getTotalClientCount());
+                    
+                    // Get the size of the registered client IDs map through reflection to show connected clients
+                    // directly from registered clients rather than just active streams
+                    try {
+                        java.lang.reflect.Field registeredClientIdsField = 
+                                streamingServer.getClass().getDeclaredField("registeredClientIds");
+                        registeredClientIdsField.setAccessible(true);
+                        Map<?, ?> registeredClientIds = (Map<?, ?>) registeredClientIdsField.get(streamingServer);
+                        
+                        // Show a more detailed message about registered clients vs active streams
+                        if (registeredClientIds != null) {
+                            StringBuilder statusText = new StringBuilder();
+                            statusText.append("Server Status: ");
+                            statusText.append(streamingServer.isRunning() ? "Running" : "Stopped");
+                            statusText.append(" | Registered Clients: ").append(registeredClientIds.size());
+                            statusText.append(" | Active Streams: ").append(streamingServer.getActiveStreamsCount());
+                            
+                            serverStatusLabel.setText(statusText.toString());
+                        }
+                    } catch (Exception e) {
+                        // If we can't access the registeredClientIds field, just use the regular status
+                        serverStatusLabel.setText("Server Status: " + 
+                                (streamingServer.isRunning() ? "Running" : "Stopped"));
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    serverStatusLabel.setText("Server Status: Error updating");
+                }
+            });
+        }, 0, 2, TimeUnit.SECONDS);
     }
 
     public static void main(String[] args) {

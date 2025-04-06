@@ -382,6 +382,15 @@ public class StreamingUtil {
     }
     
     /**
+     * Check if streaming is currently active
+     * 
+     * @return true if streaming is active, false otherwise
+     */
+    public static boolean isStreaming() {
+        return isStreaming.get();
+    }
+    
+    /**
      * Check if FFMPEG is available in the system
      * 
      * @return true if FFMPEG is available, false otherwise

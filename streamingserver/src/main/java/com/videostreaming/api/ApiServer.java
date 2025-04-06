@@ -52,6 +52,88 @@ public class ApiServer {
             server.createContext("/api/videos", new VideosHandler());
             server.createContext("/api/request", new StreamRequestHandler());
             server.createContext("/api/status", new StatusHandler());
+            server.createContext("/api/connect", (exchange -> {
+                try {
+                    if ("POST".equals(exchange.getRequestMethod())) {
+                        LOGGER.info("Processing client connection request");
+                        
+                        // Get the client data
+                        String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                        
+                        // Extract client information
+                        String hostname = extractValue(requestBody, "hostname");
+                        InetAddress clientAddress = exchange.getRemoteAddress().getAddress();
+                        
+                        // Register the client with the streaming server
+                        String clientId = streamingServer.registerClient(clientAddress, hostname);
+                        LOGGER.info("Registered new client: " + clientId + " from " + clientAddress);
+                        
+                        // Prepare response
+                        String response = "{\"success\":true,\"clientId\":\"" + clientId + "\"}";
+                        
+                        // Send the response
+                        exchange.getResponseHeaders().set("Content-Type", "application/json");
+                        exchange.sendResponseHeaders(200, response.getBytes().length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(response.getBytes());
+                        }
+                    } else {
+                        // Method not allowed
+                        exchange.sendResponseHeaders(405, 0);
+                        exchange.getResponseBody().close();
+                    }
+                } catch (Exception e) {
+                    LOGGER.log(Level.SEVERE, "Error processing connection request", e);
+                    String response = "{\"success\":false,\"error\":\"" + e.getMessage() + "\"}";
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(500, response.getBytes().length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(response.getBytes());
+                    }
+                }
+            }));
+            
+            // Client disconnection endpoint
+            server.createContext("/api/disconnect", (exchange -> {
+                try {
+                    if ("POST".equals(exchange.getRequestMethod())) {
+                        LOGGER.info("Processing client disconnection request");
+                        
+                        // Get the client data
+                        String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                        
+                        // Extract client ID
+                        String clientId = extractValue(requestBody, "clientId");
+                        InetAddress clientAddress = exchange.getRemoteAddress().getAddress();
+                        
+                        // Unregister the client with the streaming server
+                        streamingServer.unregisterClient(clientId, clientAddress);
+                        LOGGER.info("Unregistered client: " + clientId + " from " + clientAddress);
+                        
+                        // Prepare response
+                        String response = "{\"success\":true}";
+                        
+                        // Send the response
+                        exchange.getResponseHeaders().set("Content-Type", "application/json");
+                        exchange.sendResponseHeaders(200, response.getBytes().length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(response.getBytes());
+                        }
+                    } else {
+                        // Method not allowed
+                        exchange.sendResponseHeaders(405, 0);
+                        exchange.getResponseBody().close();
+                    }
+                } catch (Exception e) {
+                    LOGGER.log(Level.SEVERE, "Error processing disconnection request", e);
+                    String response = "{\"success\":false,\"error\":\"" + e.getMessage() + "\"}";
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(500, response.getBytes().length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(response.getBytes());
+                    }
+                }
+            }));
             server.setExecutor(Executors.newCachedThreadPool());
             server.start();
             LOGGER.info("API server started on port " + port);
@@ -419,6 +501,39 @@ public class ApiServer {
                     os.write(errorResponse.getBytes(StandardCharsets.UTF_8));
                 }
             }
+        }
+    }
+    
+    /**
+     * Extract a string value from a JSON string
+     */
+    private String extractValue(String json, String key) {
+        // Very simple JSON parser (not robust, but sufficient for demo)
+        String searchStr = "\"" + key + "\":\"";
+        int startIndex = json.indexOf(searchStr);
+        if (startIndex == -1) {
+            // Try without quotes for number or boolean
+            searchStr = "\"" + key + "\":";
+            startIndex = json.indexOf(searchStr);
+            if (startIndex == -1) {
+                return null;
+            }
+            startIndex += searchStr.length();
+            int endIndex = json.indexOf(",", startIndex);
+            if (endIndex == -1) {
+                endIndex = json.indexOf("}", startIndex);
+            }
+            if (endIndex == -1) {
+                return json.substring(startIndex);
+            }
+            return json.substring(startIndex, endIndex);
+        } else {
+            startIndex += searchStr.length();
+            int endIndex = json.indexOf("\"", startIndex);
+            if (endIndex == -1) {
+                return null;
+            }
+            return json.substring(startIndex, endIndex);
         }
     }
 } 
