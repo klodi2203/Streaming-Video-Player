@@ -29,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -52,6 +51,12 @@ public class MainApp extends Application {
     private VideoScanService videoScanService;
     private VideoConversionService videoConversionService;
     private ApiServer apiServer;
+    
+    // Server status components
+    private Label activeClientsLabel;
+    private Label activeStreamsLabel;
+    private Label totalClientsLabel;
+    private ScheduledExecutorService statusUpdateExecutor;
     
     // Executor for UI updates
     private final ScheduledExecutorService uiUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -103,6 +108,25 @@ public class MainApp extends Application {
         progressBar.setPrefWidth(Double.MAX_VALUE);
         progressBar.setVisible(false);
         
+        // Create server status section
+        VBox serverStatusBox = new VBox(5);
+        serverStatusBox.getStyleClass().add("status-section");
+        serverStatusBox.setPadding(new Insets(10));
+        
+        Label serverStatusLabel = new Label("Server Status");
+        serverStatusLabel.getStyleClass().add("status-heading");
+        
+        activeClientsLabel = new Label("Active Clients: 0");
+        activeStreamsLabel = new Label("Active Streams: 0");
+        totalClientsLabel = new Label("Total Clients: 0");
+        
+        serverStatusBox.getChildren().addAll(
+            serverStatusLabel, 
+            activeClientsLabel, 
+            activeStreamsLabel, 
+            totalClientsLabel
+        );
+        
         // Create the buttons
         rescanButton = new Button("Rescan");
         rescanButton.setPrefWidth(120);
@@ -119,7 +143,7 @@ public class MainApp extends Application {
 
         // Create the right panel with log and button
         VBox rightSection = new VBox(10);
-        rightSection.getChildren().addAll(logLabel, logTextArea, statusLabel, progressBar, buttonBox);
+        rightSection.getChildren().addAll(logLabel, logTextArea, serverStatusBox, statusLabel, progressBar, buttonBox);
         VBox.setVgrow(logTextArea, Priority.ALWAYS);
         
         // Add log section to a panel container
@@ -157,6 +181,9 @@ public class MainApp extends Application {
         // Initialize API server
         initApiServer();
         
+        // Start periodic status updates
+        startStatusUpdates();
+        
         // Automatically scan videos directory on startup
         log("Application started");
         scanVideosDirectory();
@@ -165,6 +192,9 @@ public class MainApp extends Application {
         primaryStage.setOnCloseRequest(event -> {
             if (uiUpdateExecutor != null) {
                 uiUpdateExecutor.shutdown();
+            }
+            if (statusUpdateExecutor != null) {
+                statusUpdateExecutor.shutdown();
             }
         });
     }
@@ -440,6 +470,22 @@ public class MainApp extends Application {
         log("API server started on port 8080");
     }
 
+    /**
+     * Start periodic server status updates
+     */
+    private void startStatusUpdates() {
+        statusUpdateExecutor = Executors.newSingleThreadScheduledExecutor();
+        statusUpdateExecutor.scheduleAtFixedRate(() -> {
+            if (apiServer != null) {
+                Platform.runLater(() -> {
+                    activeClientsLabel.setText("Active Clients: " + apiServer.getStreamingServer().getActiveClientsCount());
+                    activeStreamsLabel.setText("Active Streams: " + apiServer.getStreamingServer().getActiveStreamsCount());
+                    totalClientsLabel.setText("Total Clients: " + apiServer.getStreamingServer().getTotalClientCount());
+                });
+            }
+        }, 0, 2, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
     public static void main(String[] args) {
         launch(args);
     }
@@ -449,6 +495,11 @@ public class MainApp extends Application {
         // Shutdown the scheduled executor service
         if (uiUpdateExecutor != null && !uiUpdateExecutor.isShutdown()) {
             uiUpdateExecutor.shutdownNow();
+        }
+        
+        // Shutdown the status update executor
+        if (statusUpdateExecutor != null && !statusUpdateExecutor.isShutdown()) {
+            statusUpdateExecutor.shutdownNow();
         }
         
         // Stop API server

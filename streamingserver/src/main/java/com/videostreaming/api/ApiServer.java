@@ -51,6 +51,7 @@ public class ApiServer {
             server = HttpServer.create(new InetSocketAddress(port), 0);
             server.createContext("/api/videos", new VideosHandler());
             server.createContext("/api/request", new StreamRequestHandler());
+            server.createContext("/api/status", new StatusHandler());
             server.setExecutor(Executors.newCachedThreadPool());
             server.start();
             LOGGER.info("API server started on port " + port);
@@ -75,6 +76,14 @@ public class ApiServer {
         if (streamingServer != null && streamingServer.isRunning()) {
             streamingServer.stop();
         }
+    }
+    
+    /**
+     * Get the streaming server instance
+     * @return The streaming server
+     */
+    public StreamingServer getStreamingServer() {
+        return streamingServer;
     }
     
     /**
@@ -352,6 +361,64 @@ public class ApiServer {
             if (endIndex == -1) return "";
             
             return json.substring(startIndex, endIndex);
+        }
+    }
+    
+    /**
+     * Handler for /api/status endpoint - reports server status
+     */
+    private class StatusHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            try {
+                // Enable CORS
+                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+                
+                if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+                    // Handle preflight request
+                    exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, OPTIONS");
+                    exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+                    exchange.sendResponseHeaders(204, -1);
+                    return;
+                }
+                
+                if (exchange.getRequestMethod().equalsIgnoreCase("GET")) {
+                    // Get server status
+                    String serverStatus = streamingServer.getServerStatus();
+                    
+                    // Create JSON response
+                    String jsonResponse = String.format(
+                        "{\"status\":\"%s\",\"activeClients\":%d,\"activeStreams\":%d,\"totalClients\":%d}",
+                        streamingServer.isRunning() ? "running" : "stopped",
+                        streamingServer.getActiveClientsCount(),
+                        streamingServer.getActiveStreamsCount(),
+                        streamingServer.getTotalClientCount()
+                    );
+                    
+                    LOGGER.info("Status request from " + exchange.getRemoteAddress().getAddress() + 
+                            " - Active clients: " + streamingServer.getActiveClientsCount());
+                    
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, jsonResponse.getBytes(StandardCharsets.UTF_8).length);
+                    
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(jsonResponse.getBytes(StandardCharsets.UTF_8));
+                    }
+                } else {
+                    // Method not allowed
+                    exchange.sendResponseHeaders(405, 0);
+                    exchange.getResponseBody().close();
+                }
+            } catch (Exception e) {
+                LOGGER.log(Level.SEVERE, "Error handling status request", e);
+                String errorResponse = "{\"error\":\"" + e.getMessage() + "\"}";
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(500, errorResponse.getBytes(StandardCharsets.UTF_8).length);
+                
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(errorResponse.getBytes(StandardCharsets.UTF_8));
+                }
+            }
         }
     }
 } 
